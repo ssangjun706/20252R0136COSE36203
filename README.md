@@ -7,28 +7,31 @@ This project implements a Korean-English translation model using the AIHub News 
 ```
 cose362/
 ├── data/
-│   └── aihub_news/        # AIHub News Translation Dataset
-│   └── loaders.py
-│   └── xlsx.py
+│   └── aihub_news/       # AIHub News Translation Dataset
+│   └── loaders.py        # compatible loader with many source and format
+│   └── _xlsx.py          # using load xlsx format
 ├── prototype/
-│   └── model.py           # Model prototyping and experiments
+│   └── model.py          # Model prototyping and experiments
 ├── src/
 │   ├── __init__.py
-│   ├── baseline.py        # Baseline model implementation
-│   ├── config.py          # Configuration settings
-│   ├── eval.py            # Model evaluation scripts
+│   ├── baseline.py       # Baseline model implementation
+│   ├── config.py         # Configuration settings
+│   ├── eval.py           # Model evaluation scripts 
 │   ├── train.py          # Training scripts
-│   └── utils.py          
+│   └── utils.py          # for help function
 └── test.py               # Test scripts
 ```
 
-### 핵심 학습 및 평가 파이프라인 (`src/`)
+### 핵심 학습 및 평가 파이프라인
+
+* `data/loaders.py`
+  데이터 셋의 소스가 로컬이든 허깅페이스든, 상관없이 사용할 수 있는 형태로 가공해서 로드하는 코드. 현재까지 지원되는 포맷은 xlsx, json, arrow 이다.
 
 * `src/config.py`
   데이터 경로, 번역 방향, 모델 이름, 최대 길이, 언어 코드, 학습 하이퍼파라미터 등 전체 설정을 중앙에서 관리한다. 이 값들은 모든 학습/평가 스크립트에서 공통적으로 사용된다.
 
 * `src/utils.py`
-  AIHub Excel 데이터를 가공하는 유틸리티를 제공한다. 열 자동 탐지, 언어 추론, 쌍 추출, 데이터셋 분할, 캐시 저장, Hugging Face `DatasetDict` 생성 등을 담당한다.
+  help functions
 
 * `src/baseline.py`
   MarianMT 기반 베이스라인 모델을 위한 헬퍼들을 제공한다. 데이터셋 구성, 토크나이저·모델 로딩, 전처리 함수 준비, 데이터 collator 생성 등을 포함한다.

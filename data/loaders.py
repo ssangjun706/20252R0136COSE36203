@@ -10,7 +10,7 @@ loaders.py
 import os, random
 import pandas as pd
 from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
-from .xlsx import build_hfds_from_xlsx
+from ._xlsx import build_hfds_from_xlsx
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 HF_LOCAL_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "hf_cache"))
