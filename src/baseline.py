@@ -2,7 +2,7 @@
 from transformers import MarianTokenizer, MarianMTModel, DataCollatorForSeq2Seq
 from datasets import DatasetDict
 from typing import Tuple
-from .config import CFG
+from .configs._config import CFG
 from .utils import build_hfds_from_xlsx
 
 def build_data(cfg: CFG) -> DatasetDict:

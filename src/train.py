@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from transformers import Seq2SeqTrainingArguments, Seq2SeqTrainer, set_seed
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, DataCollatorForSeq2Seq
-from .config import CFG
+from .configs._config import CFG
 from .utils import build_hfds_from_xlsx
 
 def main():
