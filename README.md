@@ -25,7 +25,7 @@ cose362/
 ### 핵심 학습 및 평가 파이프라인
 
 * `data/loaders.py`
-  데이터 셋의 소스가 로컬이든 허깅페이스든, 상관없이 사용할 수 있는 형태로 가공해서 로드하는 코드. 현재까지 지원되는 포맷은 xlsx, json, arrow 이다.
+  데이터 셋의 소스가 로컬이든 허깅페이스든 상관없이 사용할 수 있는 형태로 가공해서 로드한다. 현재 지원 포맷은 xlsx, json, arrow 이다.
 
 * `src/config.py`
   데이터 경로, 번역 방향, 모델 이름, 최대 길이, 언어 코드, 학습 하이퍼파라미터 등 전체 설정을 중앙에서 관리한다. 이 값들은 모든 학습/평가 스크립트에서 공통적으로 사용된다.
@@ -84,14 +84,6 @@ To evaluate the model:
 
 ```bash
 python -m cose362.src.eval
-```
-
-### Testing
-
-To run tests:
-
-```bash
-python test.py
 ```
 
 ## Data
