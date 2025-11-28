@@ -4,7 +4,7 @@ src/baseline.py
 
 HF 백본 모델
 - HuggingFace seq2seq 백본 모델/토크나이저 빌더
-- 데이터 전처리(preprocess) 함수 빌더   # cf) 데이터 레벨 전처리는 loaders.py에서, 모델 입력 레벨 전처리는 여기서 수행.
+- 모델 입력(feature) 전처리 함수 빌더   # cf) loaders.py에서는 데이터 형식 통일 전처리 수행. (로더는 모델과 독립적.)
 - DataCollator 빌더
 """
 
