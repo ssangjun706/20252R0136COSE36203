@@ -1,4 +1,12 @@
 # -*- coding: utf-8 -*-
+"""
+prototype/model.py
+
+컨텍스트-aware 구조 정의 + wrapper 팩토리
+- Adapter, FiLM, ContextProjector
+- ContextAwareMTWrapper
+- ContextConfig, ContextCache
+"""
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple, List
 import torch
@@ -55,22 +63,22 @@ class ContextProjector(nn.Module):
         return ct
 
 
-class MiniPrefixKV(nn.Module):
-    """
-    미니 프리픽스 K/V 생성기. ct -> Kctx, Vctx
-    """
-    def __init__(self, r: int, d_k: int, d_v: int, m: int = 8):
-        super().__init__()
-        self.m = m
-        self.Kp = nn.Linear(r, m * d_k, bias=True)
-        self.Vp = nn.Linear(r, m * d_v, bias=True)
+# class MiniPrefixKV(nn.Module):
+#     """
+#     미니 프리픽스 K/V 생성기. ct -> Kctx, Vctx
+#     """
+#     def __init__(self, r: int, d_k: int, d_v: int, m: int = 8):
+#         super().__init__()
+#         self.m = m
+#         self.Kp = nn.Linear(r, m * d_k, bias=True)
+#         self.Vp = nn.Linear(r, m * d_v, bias=True)
 
-    def forward(self, ct: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # ct: [B, r] -> Kctx: [B, m, d_k], Vctx: [B, m, d_v]
-        B = ct.size(0)
-        Kctx = self.Kp(ct).view(B, self.m, -1)
-        Vctx = self.Vp(ct).view(B, self.m, -1)
-        return Kctx, Vctx
+#     def forward(self, ct: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+#         # ct: [B, r] -> Kctx: [B, m, d_k], Vctx: [B, m, d_v]
+#         B = ct.size(0)
+#         Kctx = self.Kp(ct).view(B, self.m, -1)
+#         Vctx = self.Vp(ct).view(B, self.m, -1)
+#         return Kctx, Vctx
 
 
 class ScalarGate(nn.Module):
@@ -86,7 +94,7 @@ class ScalarGate(nn.Module):
 
 
 # ------------------------
-# 2) HF 모델 래퍼
+# 2) context-aware 래퍼
 # ------------------------
 
 @dataclass
@@ -94,56 +102,58 @@ class ContextConfig:
     r: int = 96                 # context bottleneck
     bottleneck: int = 96        # adapter bottleneck
     prefix_m: int = 8           # mini prefix length
-    apply_on_encoder_final: bool = True  # True: 최종은닉에 적용, False: 레이어별 hook
-    topk_decoder_layers_for_prefix: int = 3  # 상위 N 레이어에만 prefix/gate
-    gate_with_similarity: bool = False       # 유사도 감쇠 옵션
+    topk_decoder_layers_for_prefix: int = 3 # 상위 N 레이어에만 prefix/gate
+    apply_on_encoder_final: bool = True     # True: 최종은닉에 적용, False: 레이어별 hook
+    gate_with_similarity: bool = False      # 유사도 감쇠 옵션
     sim_clip_min: float = 0.0
     sim_clip_max: float = 1.0
 
+
+def infer_dims_from_base(base) -> Tuple[int, int, int]:
+    """
+    HF base 모델(config)에서 d_model, d_k, d_v를 추론.
+    - d_k, d_v는 보통 d_model / num_heads 로 둔다.
+    """
+    if not hasattr(base, "config"):
+        raise ValueError("Base model has no config")
+
+    d_model = base.config.d_model
+    if hasattr(base.config, "encoder_attention_heads"):
+        n_heads = base.config.encoder_attention_heads
+    else:
+        n_heads = base.config.num_attention_heads
+
+    d_k = d_v = d_model // n_heads
+    return d_model, d_k, d_v
 
 class ContextAwareMTWrapper(nn.Module):
     """
     HuggingFace encoder-decoder 모델을 감싼 컨텍스트-어댑터 래퍼.
     - encoder: FiLM + Adapter
-    - decoder: cross-attn Q 게이팅 + mini prefix K/V
+    - decoder: encoder_hidden_states 앞에 prefix_hidden 붙여서 "문맥 토큰" 제공
+              (정교한 K/V hook 버전은 추후 확장 가능)
     """
-    def __init__(self, base_model: nn.Module, d_model: int, d_k: int, d_v: int, cfg: ContextConfig):
+    def __init__(self, base_model: nn.Module, cfg: ContextConfig):
         super().__init__()
         self.base = base_model
         for p in self.base.parameters():
-            p.requires_grad = False      # 백본 freeze
+            p.requires_grad = False  # 백본 freeze
 
         self.cfg = cfg
-        self.ctx_proj = ContextProjector(d_model, cfg.r)
 
-        # 인코더 측
+        d_model, d_k, d_v = infer_dims_from_base(base_model)
+
+        self.ctx_proj = ContextProjector(d_model, cfg.r)
         self.film = FiLM(d_model, cfg.r)
         self.adapter = Adapter(d_model, cfg.bottleneck)
 
-        # 디코더 측: 상위 N개 레이어용 모듈 리스트
-        self.scalar_gates = nn.ModuleList()
-        self.prefix_kv    = nn.ModuleList()
+        # 간단 버전: prefix_hidden을 d_model 차원으로 생성
+        self.prefix_proj = nn.Linear(cfg.r, cfg.prefix_m * d_model, bias=True)
 
-        n_dec_layers = self._get_num_decoder_layers()
-        pick = list(range(max(0, n_dec_layers - cfg.topk_decoder_layers_for_prefix), n_dec_layers))
-        self.target_dec_layers = set(pick)
-        for _ in range(n_dec_layers):
-            self.scalar_gates.append(ScalarGate(cfg.r))
-            self.prefix_kv.append(MiniPrefixKV(cfg.r, d_k, d_v, cfg.prefix_m))
+        # 디코더용 글로벌 스칼라 게이트 (고급: 레이어별로 분리 가능)
+        self.scalar_gate = ScalarGate(cfg.r)
 
-        # 선택: 레이어별 hook으로 인코더 중간에 삽입하고 싶다면 아래 메서드 참고
-        # if not cfg.apply_on_encoder_final:
-        #     self._register_encoder_hooks(d_model)
-
-    # --------- 필수 헬퍼 ---------
-
-    def _get_num_decoder_layers(self) -> int:
-        # HF 표준 속성 추정
-        if hasattr(self.base, "model") and hasattr(self.base.model, "decoder"):
-            return len(self.base.model.decoder.layers)
-        if hasattr(self.base, "decoder"):
-            return len(self.base.decoder.layers)
-        raise ValueError("Decoder layers not found")
+    # ------ encoder/decoder helper ------
 
     def _get_encoder(self):
         if hasattr(self.base, "model") and hasattr(self.base.model, "encoder"):
@@ -159,22 +169,20 @@ class ContextAwareMTWrapper(nn.Module):
             return self.base.decoder
         raise ValueError("Decoder not found")
 
-    # --------- 컨텍스트 추출/캐시 ---------
+    # ------ context 추출 ------
 
     @torch.no_grad()
-    def encode_prev_and_cache_ct(self, prev_input_ids, prev_attention_mask, **gen_kwargs) -> torch.Tensor:
-        """
-        직전 문장 인코딩 → ct 캐시 반환. 추론 루프에서 1스텝 선계산.
-        """
-        enc = self._get_encoder()
-        enc_out = enc(input_ids=prev_input_ids,
-                      attention_mask=prev_attention_mask,
-                      return_dict=True)
-        H_prev = enc_out.last_hidden_state  # [B, Lp, d]
-        ct = self.ctx_proj(H_prev)          # [B, r]
+    def encode_prev_and_cache_ct(self, prev_input_ids, prev_attention_mask) -> torch.Tensor:
+        enc = self._get_encoder()(
+            input_ids=prev_input_ids,
+            attention_mask=prev_attention_mask,
+            return_dict=True,
+        )
+        H_prev = enc.last_hidden_state  # [B, Lp, d]
+        ct = self.ctx_proj(H_prev)      # [B, r]
         return ct
 
-    # --------- 포워드 ---------
+    # ------ forward ------
 
     def forward(
         self,
@@ -195,78 +203,50 @@ class ContextAwareMTWrapper(nn.Module):
         """
         if prev_ct is None:
             if prev_input_ids is None or prev_attention_mask is None:
-                raise ValueError("Provide either prev_ct or prev_input_ids+prev_attention_mask")
+                raise ValueError("Provide prev_ct or prev_input_ids+prev_attention_mask")
             with torch.no_grad():
                 prev_ct = self.encode_prev_and_cache_ct(prev_input_ids, prev_attention_mask)
 
-        # 1) 인코더 실행
         encoder = self._get_encoder()
-        enc_out = encoder(input_ids=input_ids,
-                          attention_mask=attention_mask,
-                          output_hidden_states=True,
-                          return_dict=True)
-        # 최종 은닉에 FiLM+Adapter (간단 모드)
-        H = enc_out.last_hidden_state                       # [B, L, d]
+        enc_out = encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        H = enc_out.last_hidden_state  # [B, L, d]
+
+        # encoder 은닉에 FiLM + Adapter
         H = self.film(H, prev_ct)
-        H = self.adapter(H)                                 # [B, L, d]
+        H = self.adapter(H)
 
-        # 2) 디코더 실행 + cross-attn 개입
-        decoder = self._get_decoder()
+        B, L, d_model = H.size()
 
-        # HF decoder는 encoder_hidden_states를 입력으로 받음
-        # 여기에서 K/V 프리픽스를 concat해야 한다. 표준 모듈에는 직접 concat 지점이 없다.
-        # 실용적 대안: prefix를 "가짜 토큰 은닉"으로 만들어 encoder_hidden_states 앞에 붙인다.
-        # 주의: 이는 self-attn의 positional 의미를 바꾸지 않게 별도 마스크가 필요.
-        # 아래는 스켈레톤 구현: 프리픽스를 생성해 concat하고, 마스크도 확장한다.
+        # context 기반 prefix hidden 생성
+        prefix_hidden = self.prefix_proj(prev_ct).view(B, self.cfg.prefix_m, d_model)  # [B,m,d]
+        enc_hidden_with_prefix = torch.cat([prefix_hidden, H], dim=1)                  # [B,m+L,d]
 
-        B, L, d = H.size()
-        Kctx_list, Vctx_list, gate_list = [], [], []
-
-        # 상위 N 레이어에서만 prefix/gate를 쓰기 위해 메타정보를 전달
-        # HF 디코더에 직접 레이어별 제어를 넣기 어렵기 때문에,
-        # 여기서는 "공통 프리픽스 은닉"을 만들어 전달하고,
-        # 게이트는 쿼리 축소 계수로 흉내낸다(간단 버전).
-        # 고급: 각 레이어의 encoder_attn 모듈을 교체하거나 forward hook으로 Q scaling.
-
-        # 공통 프리픽스 은닉을 하나 만들어 encoder_hidden_states 앞에 붙인다.
-        # d_k, d_v 차원과 d_model이 달라도, attention 투영 전이므로 d_model로 생성해 충분히 근사 가능.
-        # 간단히 d_model 프리픽스 생성:
-        # 평균적으로 K/V 공간과 동일 선형 변환을 공유하므로 효과는 유지됨.
-        # 필요시, 각 레이어별로 별도 prefix를 생성해 hook에서 주입하라.
-        m = self.cfg.prefix_m
-        prefix_proj = nn.Linear(self.cfg.r, m * d, bias=True).to(H.device)
-        with torch.no_grad():
-            prefix_hidden = prefix_proj(prev_ct).view(B, m, d)  # [B, m, d]
-
-        enc_hidden_with_prefix = torch.cat([prefix_hidden, H], dim=1)   # [B, m+L, d]
         if attention_mask is not None:
-            prefix_mask = torch.ones(B, m, dtype=attention_mask.dtype, device=attention_mask.device)
-            enc_mask_with_prefix = torch.cat([prefix_mask, attention_mask], dim=1)  # [B, m+L]
+            prefix_mask = torch.ones(B, self.cfg.prefix_m, dtype=attention_mask.dtype, device=attention_mask.device)
+            enc_mask_with_prefix = torch.cat([prefix_mask, attention_mask], dim=1)
         else:
             enc_mask_with_prefix = None
 
-        # 쿼리 게이팅: 간단 버전(전체 디코더에 스칼라 적용)
-        # 고급: 레이어별 hook으로 Q를 스케일링
-        gate_global = self.scalar_gates[-1](prev_ct)  # [B,1,1]
-        # 디코더 입력을 게이트로 선형 축소해 효과를 부여
-        # 실제로는 Q만 스케일해야 하지만 후킹 없이 근사: dec hidden을 스케일
-        def _scale_decoder_inputs(x):
-            return x * gate_global
+        decoder = self._get_decoder()
 
+        # 간단 버전: decoder는 그대로 사용, encoder_hidden_states만 확장
         if decoder_input_ids is not None:
-            # teacher forcing
-            dec_in = decoder_input_ids
-            # 간단 근사: 임베딩 행렬을 얻고 스케일. HF 내부에서 하므로 여기선 생략.
-            out = decoder(
-                input_ids=dec_in,
+            dec_out = decoder(
+                input_ids=decoder_input_ids,
                 attention_mask=decoder_attention_mask,
                 encoder_hidden_states=enc_hidden_with_prefix,
                 encoder_attention_mask=enc_mask_with_prefix,
                 return_dict=True,
             )
         else:
-            # generate step용: decoder_start_token_id 등은 베이스 모델의 generate 사용 권장
-            out = decoder(
+            # generate 시에는 base.generate()를 쓰는 게 맞으므로,
+            # 이 경로는 학습/Teacher forcing에 주로 사용됨.
+            dec_out = decoder(
                 input_ids=None,
                 attention_mask=decoder_attention_mask,
                 encoder_hidden_states=enc_hidden_with_prefix,
@@ -274,97 +254,33 @@ class ContextAwareMTWrapper(nn.Module):
                 return_dict=True,
             )
 
-        # LM head 호출은 베이스 모델에 위임
+        # LM head 호출
         if hasattr(self.base, "lm_head"):
-            logits = self.base.lm_head(out.last_hidden_state)
+            logits = self.base.lm_head(dec_out.last_hidden_state)
         elif hasattr(self.base, "model") and hasattr(self.base.model, "lm_head"):
-            logits = self.base.model.lm_head(out.last_hidden_state)
+            logits = self.base.model.lm_head(dec_out.last_hidden_state)
         else:
             raise ValueError("LM head not found on base model")
 
         loss = None
         if labels is not None:
-            # 표준 CE
             shift_logits = logits[:, :-1, :].contiguous()
             shift_labels = labels[:, 1:].contiguous()
             loss = F.cross_entropy(
                 shift_logits.view(-1, shift_logits.size(-1)),
                 shift_labels.view(-1),
-                ignore_index=-100
+                ignore_index=-100,
             )
 
-        return {"loss": loss, "logits": logits, "encoder_hidden_states": H, "gate": gate_global}
-
-    # ------------------------
-    # (선택) 고급: 인코더 레이어별 훅으로 FiLM+Adapter 삽입
-    # ------------------------
-    def _register_encoder_hooks(self, d_model: int):
-        """
-        HF 인코더의 각 block 출력에 FiLM+Adapter 적용하는 예시.
-        모델마다 블록 명이 다를 수 있으니 실제 모듈 경로 확인 필요.
-        """
-        encoder = self._get_encoder()
-        for i, layer in enumerate(encoder.layers):
-            def _make_hook():
-                def hook(module, inp, out):
-                    # out: (hidden_states, present_key_value, ...)일 수도 있어 모델마다 다름
-                    h = out[0] if isinstance(out, tuple) else out
-                    # 여기서 prev_ct 접근이 필요. forward ctx에 담거나, thread-local 저장.
-                    # 스켈레톤에서는 생략. 실전은 forward 중 self._current_ct를 set 후 사용.
-                    ct = getattr(self, "_current_ct", None)
-                    if ct is None:
-                        return out
-                    h2 = self.film(h, ct)
-                    h2 = self.adapter(h2)
-                    if isinstance(out, tuple):
-                        out = (h2,) + out[1:]
-                        return out
-                    return h2
-                return hook
-            layer.register_forward_hook(_make_hook())
+        return {"loss": loss, "logits": logits, "encoder_hidden_states": H, "ct": prev_ct}
 
 
 # ------------------------
-# 3) 사용 예시
-# ------------------------
-"""
-from transformers import MarianMTModel
-
-base = MarianMTModel.from_pretrained("Helsinki-NLP/opus-mt-en-ko")
-d_model = base.config.d_model           # 예: 512, 768 등
-d_k = d_v = d_model // base.config.encoder_attention_heads
-
-cfg = ContextConfig(
-    r=96, bottleneck=96, prefix_m=8,
-    apply_on_encoder_final=True,        # 간단 모드
-    topk_decoder_layers_for_prefix=3,
-    gate_with_similarity=False
-)
-
-model = ContextAwareMTWrapper(base, d_model=d_model, d_k=d_k, d_v=d_v, cfg=cfg)
-
-# 학습 루프 스케치
-batch = next(iter(dataloader))
-prev_ct = model.encode_prev_and_cache_ct(batch["prev_input_ids"], batch["prev_attention_mask"])
-out = model(
-    input_ids=batch["input_ids"],
-    attention_mask=batch["attention_mask"],
-    decoder_input_ids=batch["decoder_input_ids"],
-    decoder_attention_mask=batch["decoder_attention_mask"],
-    labels=batch["labels"],
-    prev_ct=prev_ct,   # 실시간/학습 모두 가능
-)
-loss = out["loss"]
-loss.backward()
-optimizer.step()
-"""
-
-# ------------------------
-# 4) 유틸: 실시간 루프용 캐시
+# 3) 유틸: ContextCache
 # ------------------------
 
 class ContextCache:
-    """직전 ct 캐시. 대화 스트림마다 ID를 키로 관리."""
+    """직전 ct 캐시. 스트림 ID 별로 관리."""
     def __init__(self):
         self._mem: Dict[Any, torch.Tensor] = {}
 
@@ -379,3 +295,23 @@ class ContextCache:
             self._mem.clear()
         else:
             self._mem.pop(stream_id, None)
+
+
+# ------------------------
+# 4) 팩토리: cfg + base → context 모델
+# ------------------------
+
+from .configs._config import CFG
+
+def build_context_model(base_model: nn.Module, cfg: CFG) -> ContextAwareMTWrapper:
+    """
+    CFG 안에 컨텍스트 관련 하이퍼파라미터가 있다면 여기서 ContextConfig로 옮겨 담을 수 있음.
+    일단은 기본값만 사용하고, 추후 CFG.CONTEXT_* 필드 추가해서 연결하는 구조로 설계.
+    """
+    ctx_cfg = ContextConfig(
+        r=getattr(cfg, "CTX_R", 96),
+        bottleneck=getattr(cfg, "CTX_BOTTLENECK", 96),
+        prefix_m=getattr(cfg, "CTX_PREFIX_M", 8),
+        topk_decoder_layers_for_prefix=getattr(cfg, "CTX_TOPK_DEC_LAYERS", 3),
+    )
+    return ContextAwareMTWrapper(base_model, ctx_cfg)

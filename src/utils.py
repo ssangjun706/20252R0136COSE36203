@@ -139,9 +139,8 @@ def translate_batch_texts(model, tok, dev, amp_ctx, gen_kwargs, texts, cfg):
             hyps.extend(out)
     return hyps
 
-# --------------------------------------------------------
-# LOGGER SETUP
-# --------------------------------------------------------
+
+# ---------------- LOGGER SETUP ----------------
 def setup_logger():
     logging.basicConfig(
         format="[%(asctime)s] [%(levelname)s] %(message)s",
