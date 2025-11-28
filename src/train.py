@@ -24,17 +24,17 @@ from .configs._config import CFG
 from .baseline import build_backbone, build_preprocess_fn, build_collator
 from ..prototype.model import build_context_model
 from ..data.loaders import load_train_val_test  # TODO: loaders.py에 구현 필요
-from .utils import setup_logger  # 이미 eval에서 쓰는 logger라 가정
+from .utils import *
 
 
 def main():
     logger = setup_logger()
 
-    # 1) 사용할 설정 선택 (일단 하드코딩, 추후 argparse 가능)
-    cfg: CFG = CONFIGS["aihub_en2ko"]
-    set_seed(cfg.SEED)
-
+    # 1) 데이터셋 선택 (aihub_en2ko / lemonmint_en2ko / ...)
+    cfg: CFG = CONFIGS["lemonmint_en2ko"] # 일단 하드코딩 해둠. 추후 필요시: argparse 등으로 개선
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
+
+    set_seed(cfg.SEED)
 
     # 2) 데이터셋 로딩 (train/validation)
     #    loaders.load_train_val_test는 아래 형태로 동작하도록 구현 가정:
@@ -45,18 +45,14 @@ def main():
     val_ds   = ds_dict["validation"]
     logger.info(f"[TRAIN] train={len(train_ds):,}, val={len(val_ds):,}")
 
+
     # 3) 백본 모델 + 토크나이저
     tok, base_model = build_backbone(cfg)
 
-    # 4) baseline vs context-aware 선택
-    use_context = getattr(cfg, "USE_CONTEXT", False)
+    # inspect_dataset
 
-    if use_context:
-        logger.info("[TRAIN] Context-aware MT Wrapper 사용")
-        model = build_context_model(base_model, cfg)
-    else:
-        logger.info("[TRAIN] baseline HF seq2seq 모델 사용")
-        model = base_model
+    # 4) context-aware 모델 래핑
+    model = build_context_model(base_model, cfg)
 
     # 5) 전처리/콜레이터
     preprocess = build_preprocess_fn(tok, cfg)
