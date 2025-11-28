@@ -10,6 +10,7 @@ loaders.py
 import os, random
 import pandas as pd
 from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
+from typing  import Dict
 from ._xlsx import build_hfds_from_xlsx
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -209,3 +210,12 @@ def load_eval_dataset(cfg, logger=None):
 
     else:
         raise RuntimeError(f"지원하지 않는 SOURCE: {cfg.SOURCE}")
+
+def load_train_val_test(cfg, logger=None) -> Dict[str, Dataset]:
+    """
+    cfg에 따라 HF/xlsx/json 등에서 병렬 말뭉치를 불러오고,
+    train/validation을 나눠서 반환.
+    - 이미 train/validation split이 있으면 그대로 반환
+    - 없으면 train_test_split으로 쪼개기 등
+    """
+    ...

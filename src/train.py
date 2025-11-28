@@ -1,35 +1,81 @@
 # -*- coding: utf-8 -*-
-from transformers import Seq2SeqTrainingArguments, Seq2SeqTrainer, set_seed
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, DataCollatorForSeq2Seq
+"""
+src/train.py
+
+트레이닝 엔트리 포인트.
+CFG → 데이터 → (baseline/context) 모델 → Trainer
+- CFG 선택
+- 데이터셋 로딩
+- (baseline or context-aware) 모델 구성
+- Trainer 실행
+"""
+
+import os
+import contextlib
+
+from transformers import (
+    Seq2SeqTrainingArguments,
+    Seq2SeqTrainer,
+    set_seed,
+)
+
+from .configs import CONFIGS
 from .configs._config import CFG
-from .utils import build_hfds_from_xlsx
+from .baseline import build_backbone, build_preprocess_fn, build_collator
+from ..prototype.model import build_context_model
+from ..data.loaders import load_train_val_test  # TODO: loaders.py에 구현 필요
+from .utils import setup_logger  # 이미 eval에서 쓰는 logger라 가정
+
 
 def main():
-    cfg = CFG()
+    logger = setup_logger()
+
+    # 1) 사용할 설정 선택 (일단 하드코딩, 추후 argparse 가능)
+    cfg: CFG = CONFIGS["aihub_en2ko"]
     set_seed(cfg.SEED)
 
-    ds = build_hfds_from_xlsx(cfg.RAW_DIR, cfg.DIRECTION, cache_dir=cfg.CACHE_DIR)
+    os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
 
-    tok = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
-    # 언어 코드 지정
-    if hasattr(tok, "src_lang"):
-        tok.src_lang = cfg.SRC_LANG
+    # 2) 데이터셋 로딩 (train/validation)
+    #    loaders.load_train_val_test는 아래 형태로 동작하도록 구현 가정:
+    #    return {"train": Dataset, "validation": Dataset}
+    logger.info(f"[TRAIN] 데이터셋 로딩... SOURCE={cfg.SOURCE}, FORMAT={cfg.FORMAT}")
+    ds_dict = load_train_val_test(cfg, logger)
+    train_ds = ds_dict["train"]
+    val_ds   = ds_dict["validation"]
+    logger.info(f"[TRAIN] train={len(train_ds):,}, val={len(val_ds):,}")
 
-    model = AutoModelForSeq2SeqLM.from_pretrained(cfg.MODEL_NAME)
+    # 3) 백본 모델 + 토크나이저
+    tok, base_model = build_backbone(cfg)
 
-    max_src, max_tgt = cfg.MAX_SRC, cfg.MAX_TGT
-    def preprocess(examples):
-        # 입력
-        model_inputs = tok(examples["src"], max_length=max_src, truncation=True)
-        # 타겟
-        with tok.as_target_tokenizer() if hasattr(tok, "as_target_tokenizer") else contextlib.nullcontext():
-            labels = tok(text_target=examples["tgt"], max_length=max_tgt, truncation=True)
-        model_inputs["labels"] = labels["input_ids"]
-        return model_inputs
+    # 4) baseline vs context-aware 선택
+    use_context = getattr(cfg, "USE_CONTEXT", False)
 
-    tokenized = ds.map(preprocess, batched=True, remove_columns=["src","tgt"])
-    collator = DataCollatorForSeq2Seq(tok, model=model)
+    if use_context:
+        logger.info("[TRAIN] Context-aware MT Wrapper 사용")
+        model = build_context_model(base_model, cfg)
+    else:
+        logger.info("[TRAIN] baseline HF seq2seq 모델 사용")
+        model = base_model
 
+    # 5) 전처리/콜레이터
+    preprocess = build_preprocess_fn(tok, cfg)
+
+    # src/tgt → tokenized
+    tokenized_train = train_ds.map(
+        preprocess,
+        batched=True,
+        remove_columns=["src", "tgt"],
+    )
+    tokenized_val = val_ds.map(
+        preprocess,
+        batched=True,
+        remove_columns=["src", "tgt"],
+    )
+
+    collator = build_collator(tok, model)
+
+    # 6) TrainingArguments
     args = Seq2SeqTrainingArguments(
         output_dir=cfg.OUTPUT_DIR,
         evaluation_strategy="steps",
@@ -49,19 +95,28 @@ def main():
         seed=cfg.SEED,
     )
 
+    # 7) Trainer
     trainer = Seq2SeqTrainer(
         model=model,
         args=args,
-        train_dataset=tokenized["train"],
-        eval_dataset=tokenized["validation"],
+        train_dataset=tokenized_train,
+        eval_dataset=tokenized_val,
         data_collator=collator,
         tokenizer=tok,
     )
 
+    # 8) 학습
+    logger.info("[TRAIN] 학습 시작")
     trainer.train()
-    trainer.save_model(f"{cfg.OUTPUT_DIR}/final")
-    tok.save_pretrained(f"{cfg.OUTPUT_DIR}/final")
+
+    # 9) 저장 (context 모델도 base와 동일하게 save_pretrained 사용 가능)
+    final_dir = os.path.join(cfg.OUTPUT_DIR, "final")
+    os.makedirs(final_dir, exist_ok=True)
+
+    trainer.save_model(final_dir)
+    tok.save_pretrained(final_dir)
+    logger.info(f"[TRAIN] 모델 저장 완료: {final_dir}")
+
 
 if __name__ == "__main__":
-    import contextlib  # 위에서 사용
     main()
