@@ -301,9 +301,7 @@ class ContextCache:
 # 4) 팩토리: cfg + base → context 모델
 # ------------------------
 
-from .configs._config import CFG
-
-def build_context_model(base_model: nn.Module, cfg: CFG) -> ContextAwareMTWrapper:
+def build_context_model(base_model: nn.Module, cfg) -> ContextAwareMTWrapper:
     """
     CFG 안에 컨텍스트 관련 하이퍼파라미터가 있다면 여기서 ContextConfig로 옮겨 담을 수 있음.
     일단은 기본값만 사용하고, 추후 CFG.CONTEXT_* 필드 추가해서 연결하는 구조로 설계.

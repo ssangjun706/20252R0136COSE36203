@@ -144,6 +144,7 @@ def translate_batch_texts(model, tok, dev, amp_ctx, gen_kwargs, texts, cfg):
 def setup_logger():
     logging.basicConfig(
         format="[%(asctime)s] [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
         level=logging.INFO,
     )
     return logging.getLogger(__name__)

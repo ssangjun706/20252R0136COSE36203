@@ -20,9 +20,7 @@ try:
 except ImportError:
     def tqdm(x, *args, **kwargs): return x
 
-# -----------------------
-# main()
-# -----------------------
+
 def main():
     logger = setup_logger()
 
@@ -32,16 +30,17 @@ def main():
     # model_dir = os.path.join(cfg.OUTPUT_DIR, "final")
     # load_dir = model_dir if os.path.isdir(model_dir) else cfg.MODEL_NAME
 
+    # 데이터셋 로딩
+    logger.info(f"데이터셋 로딩... SOURCE={cfg.SOURCE}, FORMAT={cfg.FORMAT}")
+    test_ds = load_eval_dataset(cfg, logger)
+
     # 모델 및 토크나이저 로딩
     final_model_dir = os.path.join(cfg.OUTPUT_DIR, "final")
     load_dir = final_model_dir if os.path.isdir(final_model_dir) else cfg.MODEL_NAME
     tok = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
     logger.info(f"모델 소스: {load_dir}")
 
-    # 데이터셋 로딩
-    logger.info(f"데이터셋 로딩... SOURCE={cfg.SOURCE}, FORMAT={cfg.FORMAT}")
-    test_ds = load_eval_dataset(cfg, logger)
-    inspect_dataset(test_ds, tok, cfg, logger) # 데이터셋에 대한 전반적인 로그 출력 함수    
+    inspect_dataset(test_ds, tok, cfg, logger) # 데이터셋에 대한 전반적인 로그 출력 함수
 
     # (옵션) 랜덤 서브샘플링
     test_ds = maybe_subsample_dataset(test_ds, cfg, logger)
