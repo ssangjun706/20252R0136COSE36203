@@ -18,7 +18,7 @@ import torch.nn.functional as F
 # ------------------------
 
 class Adapter(nn.Module):
-    """Bottleneck Adapter: h -> h + U σ(D h)."""
+    """Bottleneck Adapter: h -> h + h', where h' = U @ f(D @ h)."""
     def __init__(self, d_model: int, bottleneck: int = 96):
         super().__init__()
         self.down = nn.Linear(d_model, bottleneck, bias=True)
@@ -31,25 +31,26 @@ class Adapter(nn.Module):
 
 
 class FiLM(nn.Module):
-    """FiLM: h -> γ ⊙ h + β, where [γ, β] = A @ ct."""
+    """FiLM: h -> γ ⊙ h + β, where [γ; β] = A @ ct."""
     def __init__(self, d_model: int, r: int):
         super().__init__()
         self.proj = nn.Linear(r, 2 * d_model, bias=True)
 
     def forward(self, h: torch.Tensor, ct: torch.Tensor) -> torch.Tensor:
         # h: [B, L, d], ct: [B, r]
-        gamma_beta = self.proj(ct)                 # [B, 2d]
+        gamma_beta = self.proj(ct)      # [B, 2d]
         d = h.size(-1)
-        gamma, beta = gamma_beta[..., :d], gamma_beta[..., d:]
-        gamma = gamma.unsqueeze(1)                 # [B,1,d]
-        beta  = beta.unsqueeze(1)
+        gamma = gamma_beta[..., :d]     # [B, d]
+        beta  = gamma_beta[..., d:]     # [B, d]
+        gamma = gamma.unsqueeze(1)      # [B, 1, d]
+        beta  = beta.unsqueeze(1)       # [B, 1, d]
         return gamma * h + beta
 
 
 class ContextProjector(nn.Module):
     """
-    직전 문장 인코더 은닉을 평균풀링→LN→선형 r차원으로 축약.
-    H_prev: [B, Lp, d] -> ct: [B, r]
+    직전 문장 encoder hidden을 '평균풀링→정규화→선형변환'을 통해 r차원으로 축약.
+    H_prev: [B, L_prev, d] -> context: [B, r]
     """
     def __init__(self, d_model: int, r: int = 96):
         super().__init__()
@@ -59,8 +60,8 @@ class ContextProjector(nn.Module):
     def forward(self, H_prev: torch.Tensor) -> torch.Tensor:
         c = H_prev.mean(dim=1)          # [B, d]
         c = self.ln(c)
-        ct = self.proj(c)               # [B, r]
-        return ct
+        context = self.proj(c)          # [B, r]
+        return context
 
 
 # class MiniPrefixKV(nn.Module):
@@ -131,7 +132,7 @@ class ContextAwareMTWrapper(nn.Module):
     HuggingFace encoder-decoder 모델을 감싼 컨텍스트-어댑터 래퍼.
     - encoder: FiLM + Adapter
     - decoder: encoder_hidden_states 앞에 prefix_hidden 붙여서 "문맥 토큰" 제공
-              (정교한 K/V hook 버전은 추후 확장 가능)
+              (정교한 K/V hook 버전은 추후 확장)
     """
     def __init__(self, base_model: nn.Module, cfg: ContextConfig):
         super().__init__()
@@ -139,6 +140,7 @@ class ContextAwareMTWrapper(nn.Module):
         for p in self.base.parameters():
             p.requires_grad = False  # 백본 freeze
 
+        # ---- unfreeze 파라미터 정의 ----
         self.cfg = cfg
 
         d_model, d_k, d_v = infer_dims_from_base(base_model)
@@ -178,7 +180,7 @@ class ContextAwareMTWrapper(nn.Module):
             attention_mask=prev_attention_mask,
             return_dict=True,
         )
-        H_prev = enc.last_hidden_state  # [B, Lp, d]
+        H_prev = enc.last_hidden_state  # [B, L_prev, d]
         ct = self.ctx_proj(H_prev)      # [B, r]
         return ct
 
@@ -223,8 +225,8 @@ class ContextAwareMTWrapper(nn.Module):
         B, L, d_model = H.size()
 
         # context 기반 prefix hidden 생성
-        prefix_hidden = self.prefix_proj(prev_ct).view(B, self.cfg.prefix_m, d_model)  # [B,m,d]
-        enc_hidden_with_prefix = torch.cat([prefix_hidden, H], dim=1)                  # [B,m+L,d]
+        prefix_hidden = self.prefix_proj(prev_ct).view(B, self.cfg.prefix_m, d_model)  # [B, m, d]
+        enc_hidden_with_prefix = torch.cat([prefix_hidden, H], dim=1)                  # [B, m+L, d]
 
         if attention_mask is not None:
             prefix_mask = torch.ones(B, self.cfg.prefix_m, dtype=attention_mask.dtype, device=attention_mask.device)
