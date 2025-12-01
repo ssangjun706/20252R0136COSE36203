@@ -18,8 +18,8 @@ import torch.nn.functional as F
 # ------------------------
 
 class Adapter(nn.Module):
-    """Bottleneck Adapter: h -> h + h', where h' = U @ f(D @ h)."""
     def __init__(self, d_model: int, bottleneck: int = 96):
+        """Bottleneck Adapter: h -> h + h', / where h' = U @ f(D @ h)."""
         super().__init__()
         self.down = nn.Linear(d_model, bottleneck, bias=True)
         self.up   = nn.Linear(bottleneck, d_model, bias=True)
@@ -31,8 +31,8 @@ class Adapter(nn.Module):
 
 
 class FiLM(nn.Module):
-    """FiLM: h -> γ ⊙ h + β, where [γ; β] = A @ ct."""
     def __init__(self, d_model: int, r: int):
+        """FiLM: h -> γ ⊙ h + β, / where [γ; β] = A @ ct."""
         super().__init__()
         self.proj = nn.Linear(r, 2 * d_model, bias=True)
 
@@ -48,11 +48,11 @@ class FiLM(nn.Module):
 
 
 class ContextProjector(nn.Module):
-    """
-    직전 문장 encoder hidden을 '평균풀링→정규화→선형변환'을 통해 r차원으로 축약.
-    H_prev: [B, L_prev, d] -> context: [B, r]
-    """
     def __init__(self, d_model: int, r: int = 96):
+        """
+        직전 문장 encoder hidden을 '평균풀링→정규화→선형변환'을 통해 r차원으로 축약.  
+        H_prev: [B, L_prev, d] -> context: [B, r]
+        """
         super().__init__()
         self.ln = nn.LayerNorm(d_model)
         self.proj = nn.Linear(d_model, r, bias=True)
@@ -65,10 +65,11 @@ class ContextProjector(nn.Module):
 
 
 # class MiniPrefixKV(nn.Module):
-#     """
-#     미니 프리픽스 K/V 생성기. ct -> Kctx, Vctx
-#     """
+    
 #     def __init__(self, r: int, d_k: int, d_v: int, m: int = 8):
+#         """
+#         미니 프리픽스 K/V 생성기. ct -> Kctx, Vctx
+#         """
 #         super().__init__()
 #         self.m = m
 #         self.Kp = nn.Linear(r, m * d_k, bias=True)
@@ -83,8 +84,8 @@ class ContextProjector(nn.Module):
 
 
 class ScalarGate(nn.Module):
-    """레이어별 스칼라 게이트 g = σ(w^T ct + b)."""
     def __init__(self, r: int):
+        """레이어별 스칼라 게이트 g = σ(w^T ct + b)."""
         super().__init__()
         self.w = nn.Linear(r, 1, bias=True)
 
@@ -136,13 +137,13 @@ class ContextAwareMTWrapper(nn.Module):
     """
     def __init__(self, base_model: nn.Module, cfg: ContextConfig):
         super().__init__()
-        self.base = base_model
+        # ---- freeze ----
+        self.base = base_model # 백본
         for p in self.base.parameters():
-            p.requires_grad = False  # 백본 freeze
+            p.requires_grad = False
 
-        # ---- unfreeze 파라미터 정의 ----
+        # ---- unfreeze ----
         self.cfg = cfg
-
         d_model, d_k, d_v = infer_dims_from_base(base_model)
 
         self.ctx_proj = ContextProjector(d_model, cfg.r)
@@ -199,9 +200,19 @@ class ContextAwareMTWrapper(nn.Module):
         **kwargs
     ):
         """
-        두 모드:
-        - prev_ct 제공: 실시간 루프에서 캐시 사용
-        - prev_input_ids 제공: 학습 중 직전문장으로부터 ct 계산
+        total loss = CE(context, ref) + λ_KL * KL(context || base) + λ_res * ||ΔH||^2
+        """
+
+        cfg = self.cfg
+        lambda_kl = getattr(cfg, "lambda_KL", 0.0)
+        lambda_res = getattr(cfg, "lambda_resid", 0.0)
+        kl_temp = getattr(cfg, "kl_temperature", 1.0)
+
+
+        """
+        mode:
+          - prev_ct 제공: 실시간 루프에서 캐시 사용
+          - prev_input_ids 제공: 학습 중 직전문장으로부터 ct 계산
         """
         if prev_ct is None:
             if prev_input_ids is None or prev_attention_mask is None:
@@ -209,6 +220,27 @@ class ContextAwareMTWrapper(nn.Module):
             with torch.no_grad():
                 prev_ct = self.encode_prev_and_cache_ct(prev_input_ids, prev_attention_mask)
 
+        # -----------------------------
+        # 1) (옵션) 베이스라인 모델의 출력도 계산 (KL용)
+        # -----------------------------
+        base_logits = None
+        if lambda_kl > 0.0:
+            with torch.no_grad():
+                base_out = self.base(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    decoder_input_ids=decoder_input_ids,
+                    decoder_attention_mask=decoder_attention_mask,
+                    use_cache=False,
+                    output_hidden_states=False,
+                    return_dict=True,
+                    **kwargs,
+                )
+                base_logits = base_out.logits.detach()  # [B, T, V]
+
+        # -----------------------------
+        # 2) encoder 실행 + FiLM + Adapter
+        # -----------------------------
         encoder = self._get_encoder()
         enc_out = encoder(
             input_ids=input_ids,
@@ -216,24 +248,33 @@ class ContextAwareMTWrapper(nn.Module):
             output_hidden_states=True,
             return_dict=True,
         )
-        H = enc_out.last_hidden_state  # [B, L, d]
 
-        # encoder 은닉에 FiLM + Adapter
-        H = self.film(H, prev_ct)
-        H = self.adapter(H)
+        H_before = enc_out.last_hidden_state            # [B, Ls, d]
+        H_after  = self.film(H_before, prev_ct)         # FiLM
+        H_after  = self.adapter(H_after)                # Adapter
+        delta_H  = H_after - H_before                   # residual (3-2용)
 
-        B, L, d_model = H.size()
+        # -----------------------------
+        # 3) prefix hidden 생성 + encoder_hidden_states 확장
+        #    (self.prefix_proj, cfg.prefix_m이 이미 __init__에 정의되어 있다고 가정)
+        # -----------------------------
+
+        B, Ls, d_model = H_after.size()
+        m = self.cfg.prefix_m
 
         # context 기반 prefix hidden 생성
-        prefix_hidden = self.prefix_proj(prev_ct).view(B, self.cfg.prefix_m, d_model)  # [B, m, d]
-        enc_hidden_with_prefix = torch.cat([prefix_hidden, H], dim=1)                  # [B, m+L, d]
+        prefix_hidden = self.prefix_proj(prev_ct).view(B, m, d_model)  # [B, m, d]
+        enc_hidden_with_prefix = torch.cat([prefix_hidden, H_after], dim=1)  # [B, m+Ls, d]
 
         if attention_mask is not None:
-            prefix_mask = torch.ones(B, self.cfg.prefix_m, dtype=attention_mask.dtype, device=attention_mask.device)
-            enc_mask_with_prefix = torch.cat([prefix_mask, attention_mask], dim=1)
+            prefix_mask = torch.ones(B, m, dtype=attention_mask.dtype, device=attention_mask.device)
+            enc_mask_with_prefix = torch.cat([prefix_mask, attention_mask], dim=1)  # [B, m+Ls]
         else:
             enc_mask_with_prefix = None
 
+        # -----------------------------
+        # 4) decoder 실행 (context-aware 경로)
+        # -----------------------------
         decoder = self._get_decoder()
 
         # 간단 버전: decoder는 그대로 사용, encoder_hidden_states만 확장
@@ -256,25 +297,80 @@ class ContextAwareMTWrapper(nn.Module):
                 return_dict=True,
             )
 
-        # LM head 호출
+        # 백본에서 LM head 호출
         if hasattr(self.base, "lm_head"):
-            logits = self.base.lm_head(dec_out.last_hidden_state)
+            logits_ctx = self.base.lm_head(dec_out.last_hidden_state)
         elif hasattr(self.base, "model") and hasattr(self.base.model, "lm_head"):
-            logits = self.base.model.lm_head(dec_out.last_hidden_state)
+            logits_ctx = self.base.model.lm_head(dec_out.last_hidden_state)
         else:
             raise ValueError("LM head not found on base model")
 
-        loss = None
+        # -----------------------------
+        # 5) CE loss (메인 번역 loss)
+        # -----------------------------
+        ce_loss = None
         if labels is not None:
-            shift_logits = logits[:, :-1, :].contiguous()
+            shift_logits = logits_ctx[:, :-1, :].contiguous()
             shift_labels = labels[:, 1:].contiguous()
-            loss = F.cross_entropy(
+            ce_loss = F.cross_entropy(
                 shift_logits.view(-1, shift_logits.size(-1)),
                 shift_labels.view(-1),
                 ignore_index=-100,
             )
+        total_loss = ce_loss
 
-        return {"loss": loss, "logits": logits, "encoder_hidden_states": H, "ct": prev_ct}
+        # -----------------------------
+        # 6) KL(context || base) regularization (3-1)
+        # -----------------------------
+        kl_loss = None
+        if lambda_kl > 0.0 and base_logits is not None:
+            # 길이 맞추기 (혹시 Lt-1로 shift해서 CE와 동일 마스크만 쓰고 싶으면 여기서 조정 가능)
+            min_len = min(logits_ctx.size(1), base_logits.size(1))
+            z_ctx  = logits_ctx[:, :min_len, :]
+            z_base = base_logits[:, :min_len, :]
+
+            # 온도 softmax
+            z_ctx_T  = z_ctx  / kl_temp
+            z_base_T = z_base / kl_temp
+
+            log_p = F.log_softmax(z_ctx_T, dim=-1)
+            log_q = F.log_softmax(z_base_T, dim=-1)
+            p = log_p.exp()
+
+            # KL(P || Q) = sum p (log p - log q)
+            kl = (p * (log_p - log_q)).sum(dim=-1)  # [B, L]
+
+            if labels is not None:
+                # padding(-100) 위치는 무시
+                pad_mask = labels[:, :min_len].ne(-100)  # [B, L]
+                if pad_mask.any():
+                    kl_loss = (kl * pad_mask).sum() / pad_mask.sum()
+                else:
+                    kl_loss = kl.mean()
+            else:
+                kl_loss = kl.mean()
+
+            total_loss = (total_loss if total_loss is not None else 0.0) + lambda_kl * kl_loss
+
+        # -----------------------------
+        # 7) residual L2 penalty on ΔH (3-2)
+        # -----------------------------
+        res_loss = None
+        if lambda_res > 0.0:
+            # ΔH의 평균 제곱 (전체 token 기준)
+            res_loss = delta_H.pow(2).mean()
+            total_loss = (total_loss if total_loss is not None else 0.0) + lambda_res * res_loss
+
+
+        return {
+            "loss": total_loss,
+            "logits": logits_ctx,
+            "encoder_hidden_states": H_after,
+            "ct": prev_ct,
+            "ce_loss": ce_loss,
+            "kl_loss": kl_loss,
+            "residual_loss": res_loss,
+        }
 
 
 # ------------------------
