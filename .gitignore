@@ -37,8 +37,17 @@ ENV/
 # Data files
 *.pkl
 *.h5
-data/
+# data/
 
 # Logs
 *.log
 logs/
+
+# uv
+.venv
+pyproject.toml
+main.py
+.python-version
+.gitignore
+uv.lock
+.DS_Store
