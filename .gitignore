@@ -48,3 +48,6 @@ logs/
 pyproject.toml
 main.py
 .python-version
+.gitignore
+uv.lock
+.DS_Store
