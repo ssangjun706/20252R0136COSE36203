@@ -37,7 +37,7 @@ ENV/
 # Data files
 *.pkl
 *.h5
-data/
+# data/
 
 # Logs
 *.log

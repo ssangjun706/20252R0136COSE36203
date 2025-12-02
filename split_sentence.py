@@ -15,23 +15,32 @@ def load_data(dataset_name: str):
     return dataset["train"]
 
 
-def get_processed_indices(output_file: Path) -> set[int]:
-    if not output_file.exists():
-        return set()
-
+def get_processed_indices(output_dir: Path, base_name: str) -> set[int]:
     processed = set()
-    with open(output_file, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    data = json.loads(line)
-                    processed.add(data.get("idx", -1))
-                except json.JSONDecodeError:
-                    continue
-
+    for file in output_dir.glob(f"{base_name}_*.jsonl"):
+        with open(file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        data = json.loads(line)
+                        processed.add(data.get("idx", -1))
+                    except json.JSONDecodeError:
+                        continue
     processed.discard(-1)
     return processed
+
+
+def get_current_file_info(output_dir: Path, base_name: str) -> tuple[int, int]:
+    """현재 파일 번호와 크기 반환"""
+    existing_files = sorted(output_dir.glob(f"{base_name}_*.jsonl"))
+    if not existing_files:
+        return 0, 0
+
+    last_file = existing_files[-1]
+    file_num = int(last_file.stem.split("_")[-1])
+    file_size = last_file.stat().st_size
+    return file_num, file_size
 
 
 def split_sentences(text: str) -> list[str]:
@@ -63,9 +72,10 @@ def process_row(args: tuple) -> list[dict] | None:
 def main(args):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / "wiki_augmented_v1_sentences.jsonl"
+    base_name = "wiki_augmented_v1"
+    max_file_size = args.max_size_mb * 1000 * 1000  # MB to bytes
 
-    processed = get_processed_indices(output_file)
+    processed = get_processed_indices(output_dir, base_name)
     dataset = load_data(args.dataset_name)
 
     tasks = [
@@ -80,10 +90,15 @@ def main(args):
 
     num_workers = min(cpu_count(), args.workers)
 
+    # 현재 파일 정보
+    file_num, current_size = get_current_file_info(output_dir, base_name)
+    output_file = output_dir / f"{base_name}_{file_num:04d}.jsonl"
+
     skipped = 0
     success = 0
+    f = open(output_file, "a", encoding="utf-8")
 
-    with open(output_file, "a", encoding="utf-8") as f:
+    try:
         with Pool(num_workers) as pool:
             results = pool.imap(process_row, tasks, chunksize=100)
 
@@ -93,9 +108,23 @@ def main(args):
                 else:
                     success += 1
                     for record in result:
-                        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                        line = json.dumps(record, ensure_ascii=False) + "\n"
+                        current_size += len(line.encode("utf-8"))
+                        f.write(line)
 
-    print(f"\nCompleted! Saved to: {output_file}")
+                        # 파일 크기 초과 시 새 파일로 전환
+                        if current_size >= max_file_size:
+                            f.close()
+                            file_num += 1
+                            output_file = (
+                                output_dir / f"{base_name}_{file_num:04d}.jsonl"
+                            )
+                            f = open(output_file, "w", encoding="utf-8")
+                            current_size = 0
+    finally:
+        f.close()
+
+    print(f"\nCompleted! Saved to: {output_dir}/{base_name}_*.jsonl")
     print(f"Total: {len(tasks)}, Success: {success}, Skipped: {skipped}")
 
 
@@ -108,6 +137,9 @@ if __name__ == "__main__":
     )
     parser.add_argument("--output_dir", type=str, default="data/wiki_augmented_v1")
     parser.add_argument("--workers", type=int, default=8, help="Number of workers")
+    parser.add_argument(
+        "--max_size_mb", type=int, default=99, help="Max file size in MB"
+    )
     args = parser.parse_args()
 
     main(args)
