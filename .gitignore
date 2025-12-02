@@ -42,3 +42,9 @@ data/
 # Logs
 *.log
 logs/
+
+# uv
+.venv
+pyproject.toml
+main.py
+.python-version
