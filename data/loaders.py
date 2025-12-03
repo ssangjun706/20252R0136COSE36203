@@ -104,12 +104,60 @@ def _load_local_json(cfg):
     JSON 파일을 list[dict] 형태로 읽은 뒤 Dataset으로 변환.
     """
     import json
+    
+    path = cfg.RAW_DIR
+    if os.path.isdir(path):
+        # 디렉토리 내에 존재하는 모든 *.json 파일 이름 저장
+        files = [f for f in os.listdir(path) if f.endswith(".json")]
+        if not files:
+            raise FileNotFoundError(f"No .json file found in {path}")
+    
+    src_list = []
+    tgt_list = []
 
-    with open(cfg.RAW_DIR, "r", encoding="utf-8") as f:
-        raw = json.load(f)
+    for file in files:
+        file_path = os.path.join(path, file)
+        with open(file_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
 
-    src_list = [item[cfg.SRC_FIELD] for item in raw]
-    tgt_list = [item[cfg.TGT_FIELD] for item in raw]
+        for item in raw:
+            src_list.append(item[cfg.SRC_FIELD])
+            tgt_list.append(item[cfg.TGT_FIELD])
+
+    return Dataset.from_dict({"src": src_list, "tgt": tgt_list})
+
+
+# --------------------------------------------------------
+# LOCAL JSONL LOADER
+# --------------------------------------------------------
+def _load_local_jsonl(cfg):
+    """
+    JSONL 파일을 줄 단위로 읽어 list[dict] 로 변환한 뒤 Dataset으로 변환.
+    """
+    import json
+
+    path = cfg.RAW_DIR
+    if os.path.isdir(path):
+        # 디렉토리 내에 존재하는 모든 *.jsonl 파일 이름 저장
+        files = [f for f in os.listdir(path) if f.endswith(".jsonl")]
+        if not files:
+            raise FileNotFoundError(f"No .jsonl file found in {path}")
+
+    src_list = []
+    tgt_list = []
+
+    for file in files:
+        file_path = os.path.join(path, file)
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue  # 빈 줄 건너뛰기
+                
+                obj = json.loads(line)  # 한 줄 = 하나의 JSON 객체
+
+                src_list.append(obj[cfg.SRC_FIELD])
+                tgt_list.append(obj[cfg.TGT_FIELD])
 
     return Dataset.from_dict({"src": src_list, "tgt": tgt_list})
 
@@ -190,6 +238,9 @@ def load_eval_dataset(cfg, logger=None):
 
         elif fmt == "json":
             return _load_local_json(cfg)
+        
+        elif fmt == "jsonl":
+            return _load_local_jsonl(cfg)
 
         elif fmt in ("csv", "tsv"):
             return _load_local_csv_tsv(cfg)

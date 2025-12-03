@@ -34,10 +34,9 @@ ENV/
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Data files
-*.pkl
-*.h5
-# data/
+# Data files (이거 건들지 마라 data 커밋되면 용량이 너무 크다.)
+data/
+!data/*.py
 
 # Logs
 *.log
@@ -46,8 +45,8 @@ logs/
 # uv
 .venv
 pyproject.toml
-main.py
+# main.py
 .python-version
-.gitignore
+# .gitignore
 uv.lock
 .DS_Store

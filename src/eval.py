@@ -24,8 +24,8 @@ except ImportError:
 def main():
     logger = setup_logger()
 
-    # 데이터셋 선택 (aihub_en2ko / lemonmint_en2ko / ...)
-    cfg = CONFIGS["lemonmint_en2ko"]  # 일단 하드코딩 해둠. 추후 필요시: argparse 등으로 개선
+    # 데이터셋 선택 (aihub_en2ko / lemonmint_en2ko / wiki_en2ko...)
+    cfg = CONFIGS["wiki_en2ko"]  # 일단 하드코딩 해둠. 추후 필요시: argparse 등으로 개선
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
     # model_dir = os.path.join(cfg.OUTPUT_DIR, "final")
     # load_dir = model_dir if os.path.isdir(model_dir) else cfg.MODEL_NAME

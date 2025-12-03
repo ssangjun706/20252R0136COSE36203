@@ -93,10 +93,12 @@ class CFG:
                 self.FORMAT = {
                     "xlsx": "xlsx",
                     "json": "json",
+                    "jsonl": "json",
                     "csv": "csv",
                     "tsv": "tsv",
                     "txt": "txt",
-                    "parquet": "parquet"
+                    "parquet": "parquet",
+                    "arrow": "arrow"
                 }.get(ext, "txt")  # default text
             else:
                 # RAW_DIR이 폴더라면 → XLSX 파일 묶음으로 판단
@@ -127,7 +129,7 @@ class CFG:
 
             else:  # local
                 if not self.RAW_DIR:
-                    raise ValueError("RAW_DIR required for DATA_TYPE='xlsx' or 'json'")
+                    raise ValueError("RAW_DIR required for DATA_TYPE='xlsx' or 'jsonl'")
                 dataset = self.RAW_DIR.replace("/", "_").replace("\\", "_")
 
             self.OUTPUT_DIR = f"out/{dataset}/{self.DIRECTION}"
