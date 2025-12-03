@@ -66,7 +66,12 @@ def main():
         remove_columns=["src", "tgt"],
     )
 
-    collator = build_collator(tok, model)
+    collator = build_collator(
+        tok,
+        model,
+        datasets=[tokenized_train, tokenized_val],
+        cfg=cfg,
+    )
 
     # 6) TrainingArguments
     args = Seq2SeqTrainingArguments(
