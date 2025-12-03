@@ -5,11 +5,15 @@ import pandas as pd
 from datasets import Dataset, DatasetDict
 from sacremoses import MosesPunctNormalizer, MosesTokenizer, MosesDetokenizer
 
+
+# --------------------------------------------------------
+# XLSX PARSER HELPERs
+# --------------------------------------------------------
 mpn_en = MosesPunctNormalizer(lang="en")
 mtok_en = MosesTokenizer(lang="en")
 # detok은 BLEU용 복원 때만 필요. 한국어 detok은 굳이 안 써도 됨.
 
-def moses_tokenize_en(s: str) -> str:
+def _moses_tokenize_en(s: str) -> str:
     s = mpn_en.normalize(s)
     return " ".join(mtok_en.tokenize(s, return_str=False))
 
@@ -36,7 +40,7 @@ def _find_cols(df: pd.DataFrame) -> Tuple[str, str]:
     en_col = min(scores, key=scores.get)
     return ko_col, en_col
 
-def load_xlsx_pairs(root: str, direction: str="en2ko") -> List[Tuple[str,str]]:
+def _load_xlsx_pairs(root: str, direction: str="en2ko") -> List[Tuple[str,str]]:
     pairs: List[Tuple[str,str]] = []
     for dirpath, _, files in os.walk(root):
         for fn in files:
@@ -69,7 +73,7 @@ def load_xlsx_pairs(root: str, direction: str="en2ko") -> List[Tuple[str,str]]:
     pairs = list(dict.fromkeys(pairs))
     return pairs
 
-def split_pairs(pairs: List[Tuple[str,str]], seed=1337, train_ratio=0.98, val_ratio=0.01):
+def _split_pairs(pairs: List[Tuple[str,str]], seed=1337, train_ratio=0.98, val_ratio=0.01):
     random.Random(seed).shuffle(pairs)
     n = len(pairs)
     n_train = int(n * train_ratio)
@@ -79,7 +83,7 @@ def split_pairs(pairs: List[Tuple[str,str]], seed=1337, train_ratio=0.98, val_ra
     test = pairs[n_train+n_val:]
     return train, val, test
 
-def save_parallel(out_dir: str, name: str, data: List[Tuple[str,str]]):
+def _save_parallel(out_dir: str, name: str, data: List[Tuple[str,str]]):
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, f"{name}.src"), "w", encoding="utf-8") as fs, \
          open(os.path.join(out_dir, f"{name}.tgt"), "w", encoding="utf-8") as ft:
@@ -87,14 +91,18 @@ def save_parallel(out_dir: str, name: str, data: List[Tuple[str,str]]):
             fs.write(s.replace("\n"," ").strip()+"\n")
             ft.write(t.replace("\n"," ").strip()+"\n")
 
+
+# --------------------------------------------------------
+# XLSX PARSER
+# --------------------------------------------------------
 def build_hfds_from_xlsx(root: str, direction: str, cache_dir: str=None) -> DatasetDict:
-    pairs = load_xlsx_pairs(root, direction)
+    pairs = _load_xlsx_pairs(root, direction)
     if len(pairs) < 10: raise RuntimeError(f"pair 부족: {len(pairs)}")
-    train, val, test = split_pairs(pairs)
+    train, val, test = _split_pairs(pairs)
     if cache_dir:
-        save_parallel(cache_dir, "train", train)
-        save_parallel(cache_dir, "val", val)
-        save_parallel(cache_dir, "test", test)
+        _save_parallel(cache_dir, "train", train)
+        _save_parallel(cache_dir, "val", val)
+        _save_parallel(cache_dir, "test", test)
     def to_ds(split): return Dataset.from_dict({"src":[s for s,_ in split], "tgt":[t for _,t in split]})
     return DatasetDict({"train":to_ds(train), "validation":to_ds(val), "test":to_ds(test)})
 

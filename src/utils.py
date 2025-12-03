@@ -92,13 +92,9 @@ def split_into_sentences(text: str) -> list[str]:
 
 
 # ---------------- 랜덤 샘플링 ----------------
-def maybe_subsample_dataset(ds, cfg, logger):
-    max_samples = getattr(cfg, "EVAL_MAX_SAMPLES", 2000)
-    if max_samples is None or max_samples <= 0:
-        return ds
-
+def maybe_subsample_dataset(ds, cfg, logger, max_samples=2000):
     n = len(ds)
-    if n <= max_samples:
+    if max_samples is None or max_samples <= 0 or max_samples >= n:
         return ds
 
     logger.info(f"[EVAL] 전체 {n:,}개 중 {max_samples:,}개를 랜덤 샘플링하여 평가합니다.")

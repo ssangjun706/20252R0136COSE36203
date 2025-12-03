@@ -6,14 +6,18 @@ src/eval.py
 -> test split 번역 생성
 -> BLEU 측정
 -> 결과 저장
+
+TODO:
+  - 문장 단위 번역 모드 구현 (인덱스 사용하도록)
+
 '''
 import os
 from math import ceil
 
 import torch, sacrebleu
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-from ..data.loaders import load_eval_dataset
-from .configs import CONFIGS
+from ..data.loaders import load_dataset
+from .configs import CONFIGS # -> __init__.py: CONFIGS 딕셔너리
 from .utils import * # main을 제외하고 모두 utils로 보내서 정리함.
 try:
     from tqdm.auto import tqdm
@@ -24,15 +28,16 @@ except ImportError:
 def main():
     logger = setup_logger()
 
-    # 데이터셋 선택 (aihub_en2ko / lemonmint_en2ko / ...)
-    cfg = CONFIGS["lemonmint_en2ko"]  # 일단 하드코딩 해둠. 추후 필요시: argparse 등으로 개선
+    # 데이터셋 선택 (aihub_en2ko / lemonmint_en2ko / wiki_en2ko...)
+    # 일단 하드코딩 해둠. 추후 필요시: argparse 등으로 개선
+    cfg = CONFIGS["wiki_en2ko"]  # 각 dataset.py의 CFG 객체
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
     # model_dir = os.path.join(cfg.OUTPUT_DIR, "final")
     # load_dir = model_dir if os.path.isdir(model_dir) else cfg.MODEL_NAME
 
     # 데이터셋 로딩
     logger.info(f"데이터셋 로딩... SOURCE={cfg.SOURCE}, FORMAT={cfg.FORMAT}")
-    test_ds = load_eval_dataset(cfg, logger)
+    test_ds = load_dataset(cfg, logger)
 
     # 모델 및 토크나이저 로딩
     final_model_dir = os.path.join(cfg.OUTPUT_DIR, "final")

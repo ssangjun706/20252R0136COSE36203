@@ -23,28 +23,25 @@ from .configs import CONFIGS
 from .configs._config import CFG
 from .baseline import build_backbone, build_preprocess_fn, build_collator
 from ..prototype.model import build_context_model
-from ..data.loaders import load_train_val_test  # TODO: loaders.py에 구현 필요
+from ..data.loaders import load_train_val_datasetdict
 from .utils import *
 
 
 def main():
     logger = setup_logger()
 
-    # 1) 데이터셋 선택 (aihub_en2ko / lemonmint_en2ko / ...)
-    cfg: CFG = CONFIGS["lemonmint_en2ko"] # 일단 하드코딩 해둠. 추후 필요시: argparse 등으로 개선
+    # 1) 데이터셋 선택 (aihub_en2ko / lemonmint_en2ko / wiki_en2ko ...)
+    cfg: CFG = CONFIGS["wiki_en2ko"] # 일단 하드코딩 해둠. 추후 필요시: argparse 등으로 개선
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
 
     set_seed(cfg.SEED)
 
     # 2) 데이터셋 로딩 (train/validation)
-    #    loaders.load_train_val_test는 아래 형태로 동작하도록 구현 가정:
-    #    return {"train": Dataset, "validation": Dataset}
     logger.info(f"[TRAIN] 데이터셋 로딩... SOURCE={cfg.SOURCE}, FORMAT={cfg.FORMAT}")
-    ds_dict = load_train_val_test(cfg, logger)
+    ds_dict = load_train_val_datasetdict(cfg, logger)
     train_ds = ds_dict["train"]
     val_ds   = ds_dict["validation"]
     logger.info(f"[TRAIN] train={len(train_ds):,}, val={len(val_ds):,}")
-
 
     # 3) 백본 모델 + 토크나이저
     tok, base_model = build_backbone(cfg)

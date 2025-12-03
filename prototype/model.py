@@ -110,6 +110,10 @@ class ContextConfig:
     sim_clip_min: float = 0.0
     sim_clip_max: float = 1.0
 
+    lambda_kl      = 0.1
+    lambda_resid   = 0.01
+    kl_temperature = 1.0
+    prefix_m       = 8
 
 def infer_dims_from_base(base) -> Tuple[int, int, int]:
     """
@@ -209,14 +213,12 @@ class ContextAwareMTWrapper(nn.Module):
         kl_temp = getattr(cfg, "kl_temperature", 1.0)
 
 
-        """
-        mode:
-          - prev_ct 제공: 실시간 루프에서 캐시 사용
-          - prev_input_ids 제공: 학습 중 직전문장으로부터 ct 계산
-        """
+        # case:
+        #  - prev_ct 없는 경우 → prev_input_ids로 context 계산   # 학습 모드
+        #  - prev_ct 있는 경우 → 이미 계산된 context 벡터 재사용     # 추론 모드
         if prev_ct is None:
             if prev_input_ids is None or prev_attention_mask is None:
-                raise ValueError("Provide prev_ct or prev_input_ids+prev_attention_mask")
+                raise ValueError("Provide prev_ct or prev_input_ids + prev_attention_mask")
             with torch.no_grad():
                 prev_ct = self.encode_prev_and_cache_ct(prev_input_ids, prev_attention_mask)
 

@@ -34,10 +34,10 @@ ENV/
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Data files
-*.pkl
-*.h5
-# data/
+# Data files (건들지 마라: 용량 이슈로 GitHub 업로드 에러난다)
+# 참고로 예외규칙 안될경우 git add -f data/로 강제 스테이징 후 커밋할것
+data/
+!data/*.py
 
 # Logs
 *.log
@@ -46,8 +46,8 @@ logs/
 # uv
 .venv
 pyproject.toml
-main.py
+# main.py
 .python-version
-.gitignore
+# .gitignore
 uv.lock
 .DS_Store
