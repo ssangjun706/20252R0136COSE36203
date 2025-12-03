@@ -7,10 +7,10 @@ loaders.py
 컬럼명은 "src" / "tgt" 로 통일해 반환한다.
 """
 
-import os, random
+import os, random, collections
 import pandas as pd
 from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
-from typing  import Dict
+from typing  import Dict, Optional
 from ._xlsx import build_hfds_from_xlsx
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -224,7 +224,7 @@ def _load_local_txt(cfg):
 # --------------------------------------------------------
 # MAIN DISPATCHER
 # --------------------------------------------------------
-def load_eval_dataset(cfg, logger=None):
+def load_dataset(cfg, logger=None):
     """
     Always returns datasets.Dataset
     with columns "src" and "tgt".
@@ -269,11 +269,141 @@ def load_eval_dataset(cfg, logger=None):
     else:
         raise RuntimeError(f"지원하지 않는 SOURCE: {cfg.SOURCE}")
 
-def load_train_val_test(cfg, logger=None) -> Dict[str, Dataset]:
+def subgrouping_dataset(
+    dataset: Dataset,
+    cfg,
+    logger=None,
+) -> Dataset:
+    """
+    idx 그룹 단위로 데이터셋 양을 조절한다.
+
+    - cfg.MAX_GROUPS: 사용할 idx 그룹 수를 제한 (앞에서부터 N개 그룹)
+    - cfg.MAX_SAMPLES: 전체 샘플 개수를 대략 제한 (그룹 단위로 누적)
+    """
+    max_groups: Optional[int]  = getattr(cfg, "MAX_GROUPS", None)
+    max_samples: Optional[int] = getattr(cfg, "MAX_SAMPLES", None)
+
+    if max_groups is None and max_samples is None:
+        if logger:
+            logger.info("데이터셋 크기 조절 수행 X")
+        return dataset
+    logger.info("데이터셋 크기 조절 수행")
+
+    if "idx" not in dataset.column_names:
+        raise ValueError("동일 문맥 식별자(idx) 없음")
+
+    idx_col = dataset["idx"]
+    n_rows  = len(idx_col)
+
+    # 1) 순서 보존 unique idx 리스트 + 그룹별 사이즈 계산
+    group_sizes = collections.OrderedDict()  # {group_id: size}
+    for g in idx_col:
+        if g not in group_sizes:
+            group_sizes[g] = 0
+        group_sizes[g] += 1
+
+    ordered_groups = list(group_sizes.keys())
+    num_groups     = len(ordered_groups)
+
+    if logger:
+        logger.info(
+            f"subgrouping_dataset: total_rows={n_rows}, total_groups={num_groups}, "
+            f"MAX_GROUPS={max_groups}, MAX_SAMPLES={max_samples}"
+        )
+
+    # 2) 어떤 그룹까지 포함할지 결정
+    chosen_groups = []
+
+    if max_groups is not None:
+        # 앞에서부터 max_groups개 그룹만 사용
+        chosen_groups = ordered_groups[:max_groups]
+
+    elif max_samples is not None:
+        # 그룹 단위로 추가하다가 누적 샘플 수가 max_samples 이상이 되는 시점에서 stop
+        cum = 0
+        for g in ordered_groups:
+            size_g = group_sizes[g]
+            if cum >= max_samples:
+                break
+            chosen_groups.append(g)
+            cum += size_g
+
+        if logger:
+            logger.info(
+                f"Selected {len(chosen_groups)}/{num_groups} groups "
+                f"for approx max_samples={max_samples}, actual_rows={cum}"
+            )
+
+    # for debug
+    if not chosen_groups:
+        raise ValueError("그룹 선택 오류")
+
+    chosen_set = set(chosen_groups)
+
+    # 3) filter를 통해 subset 생성 (원래 순서 유지)
+    def keep_example(example):
+        return example["idx"] in chosen_set
+
+    subset = dataset.filter(keep_example)
+
+    if logger:
+        logger.info(
+            f"subgrouping_dataset: final_rows={len(subset)}, "
+            f"final_groups={len(set(subset['idx']))}"
+        )
+
+    return subset
+
+def load_train_val_datasetdict(cfg, logger=None) -> DatasetDict:
     """
     cfg에 따라 HF/xlsx/json 등에서 병렬 말뭉치를 불러오고,
-    train/validation을 나눠서 반환.
-    - 이미 train/validation split이 있으면 그대로 반환
-    - 없으면 train_test_split으로 쪼개기 등
+    idx(맥락 집단) 단위로 train/validation을 나눠서 반환.
     """
-    ...
+    dataset = load_dataset(cfg, logger)
+    dataset = subgrouping_dataset(dataset, cfg, logger)
+
+    val_ratio = float(getattr(cfg, "VAL_RATIO", 0.1))
+    seed      = int(getattr(cfg, "SEED", 42))
+    
+    idx_col = dataset["idx"]
+    seen = set()
+    group_ids = []
+    for g in idx_col:
+        if g not in seen:
+            seen.add(g)
+            group_ids.append(g)
+
+    num_groups = len(group_ids)
+    if num_groups == 0:
+        raise ValueError("동일 문맥집단 생성 오류")
+    
+    random.seed(seed)
+    group_ids_shuffled = group_ids.copy()
+    random.shuffle(group_ids_shuffled)
+
+    num_val_groups = max(1, int(num_groups * val_ratio))
+    val_group_ids = set(group_ids_shuffled[:num_val_groups])
+
+    if logger:
+        logger.info(
+            f"Splitting by idx groups: total_groups={num_groups}, "
+            f"val_groups={num_val_groups}, val_ratio≈{num_val_groups/num_groups:.3f}"
+        )
+
+    def is_val(example):
+        return example["idx"] in val_group_ids
+
+    val_ds   = dataset.filter(is_val)
+    train_ds = dataset.filter(lambda ex: ex["idx"] not in val_group_ids)
+
+    # 여기서 filter는 원래 row 순서를 유지하므로,
+    # 이미 같은 idx가 연속으로 들어 있었던 경우라면 그대로 연속으로 남는다.
+    # (애초에 local_jsonl에서 같은 문맥이 연속으로 들어왔다고 가정)
+
+    if logger:
+        logger.info(f"Result sizes: train={len(train_ds)}, validation={len(val_ds)}")
+
+    return DatasetDict({
+        "train": train_ds,
+        "validation": val_ds,
+    })
