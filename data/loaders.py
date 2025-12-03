@@ -279,11 +279,11 @@ def subgrouping_dataset(
 
     - cfg.MAX_GROUPS: 사용할 idx 그룹 수를 제한 (앞에서부터 N개 그룹)
     - cfg.MAX_SAMPLES: 전체 샘플 개수를 대략 제한 (그룹 단위로 누적)
+    TODO: 셔플 후에 서브그룹핑 하도록 픽스해야함.
     """
     max_groups: Optional[int]  = getattr(cfg, "MAX_GROUPS", None)
-    max_samples: Optional[int] = getattr(cfg, "MAX_SAMPLES", None)
 
-    if max_groups is None and max_samples is None:
+    if max_groups is None:
         if logger:
             logger.info("데이터셋 크기 조절 수행 X")
         return dataset
@@ -308,7 +308,7 @@ def subgrouping_dataset(
     if logger:
         logger.info(
             f"subgrouping_dataset: total_rows={n_rows}, total_groups={num_groups}, "
-            f"MAX_GROUPS={max_groups}, MAX_SAMPLES={max_samples}"
+            f"MAX_GROUPS={max_groups}"
         )
 
     # 2) 어떤 그룹까지 포함할지 결정
@@ -317,22 +317,6 @@ def subgrouping_dataset(
     if max_groups is not None:
         # 앞에서부터 max_groups개 그룹만 사용
         chosen_groups = ordered_groups[:max_groups]
-
-    elif max_samples is not None:
-        # 그룹 단위로 추가하다가 누적 샘플 수가 max_samples 이상이 되는 시점에서 stop
-        cum = 0
-        for g in ordered_groups:
-            size_g = group_sizes[g]
-            if cum >= max_samples:
-                break
-            chosen_groups.append(g)
-            cum += size_g
-
-        if logger:
-            logger.info(
-                f"Selected {len(chosen_groups)}/{num_groups} groups "
-                f"for approx max_samples={max_samples}, actual_rows={cum}"
-            )
 
     # for debug
     if not chosen_groups:

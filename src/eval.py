@@ -45,7 +45,7 @@ def main():
     tok = AutoTokenizer.from_pretrained(cfg.MODEL_NAME)
     logger.info(f"모델 소스: {load_dir}")
 
-    inspect_dataset(test_ds, tok, cfg, logger) # 데이터셋에 대한 전반적인 로그 출력 함수
+    inspect_dataset(test_ds, tok, logger) # 데이터셋에 대한 전반적인 로그 출력 함수
 
     # (옵션) 랜덤 서브샘플링
     test_ds = maybe_subsample_dataset(test_ds, cfg, logger)

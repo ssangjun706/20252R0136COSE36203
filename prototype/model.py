@@ -45,7 +45,7 @@ class FiLM(nn.Module):
         beta  = gamma_beta[..., d:]     # [B, d]
         gamma = gamma.unsqueeze(1)      # [B, 1, d]
         beta  = beta.unsqueeze(1)       # [B, 1, d]
-        return gamma * h + beta
+        return h + gamma * h + beta
 
 
 class ContextProjector(nn.Module):
@@ -178,18 +178,23 @@ class ContextAwareMTWrapper(nn.Module):
         raise ValueError("Decoder not found")
 
     # ------ context 추출 ------
-
-    @torch.no_grad()
     def encode_prev_and_cache_ct(self, prev_input_ids, prev_attention_mask) -> torch.Tensor:
-        enc = self._get_encoder()(
-            input_ids=prev_input_ids,
-            attention_mask=prev_attention_mask,
-            return_dict=True,
-        )
-        H_prev = enc.last_hidden_state  # [B, L_prev, d]
+        with torch.no_grad():
+            enc = self._get_encoder()(
+                input_ids=prev_input_ids,
+                attention_mask=prev_attention_mask,
+                return_dict=True,
+            )
+            H_prev = enc.last_hidden_state  # [B, L_prev, d]
         ct = self.ctx_proj(H_prev)      # [B, r]
         return ct
 
+    # ------- generate -------
+    def generate(self, *args, **kwargs):
+        # 1) prev_ct 처리 전략을 어떻게 할지 설계해야 하고
+        # 2) encoder_hidden_states에 prefix/context를 넣는 generate용 경로를 짜야 한다.
+        return self.base.generate(*args, **kwargs)
+    
     def _contextualize_encoder(
         self,
         input_ids,
@@ -240,7 +245,6 @@ class ContextAwareMTWrapper(nn.Module):
         return outputs
 
     # ------ forward ------
-
     def forward(
         self,
         input_ids,
@@ -258,24 +262,20 @@ class ContextAwareMTWrapper(nn.Module):
         """
 
         cfg = self.cfg
-        lambda_kl = getattr(cfg, "lambda_KL", 0.0)
-        lambda_res = getattr(cfg, "lambda_resid", 0.0)
-        kl_temp = getattr(cfg, "kl_temperature", 1.0)
+        # lambda_kl = getattr(cfg, "lambda_kl", 0.1)
+        # lambda_res = getattr(cfg, "lambda_resid", 0.01)
+        # kl_temp = getattr(cfg, "kl_temperature", 1.0)
+        lambda_kl = cfg.lambda_kl
+        lambda_res = cfg.lambda_resid
+        kl_temp = cfg.kl_temperature
 
-        ctx = self._contextualize_encoder(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            prev_ct=prev_ct,
-            prev_input_ids=prev_input_ids,
-            prev_attention_mask=prev_attention_mask,
-            return_hidden_states=True,
-        )
-        prev_ct = ctx["prev_ct"]
-        enc_hidden_with_prefix = ctx["encoder_hidden_states"]
-        enc_mask_with_prefix = ctx["encoder_attention_mask"]
-        H_before = ctx["H_before"]
-        H_after = ctx["H_after"]
-        delta_H = H_after - H_before
+        # case:
+        #  - prev_ct 없는 경우 → prev_input_ids로 context 계산   # 학습 모드
+        #  - prev_ct 있는 경우 → 이미 계산된 context 벡터 재사용     # 추론 모드
+        if prev_ct is None:
+            if prev_input_ids is None or prev_attention_mask is None:
+                raise ValueError("Provide prev_ct or prev_input_ids + prev_attention_mask")
+            prev_ct = self.encode_prev_and_cache_ct(prev_input_ids, prev_attention_mask)
 
         # -----------------------------
         # 1) (옵션) 베이스라인 모델의 출력도 계산 (KL용)
@@ -294,6 +294,42 @@ class ContextAwareMTWrapper(nn.Module):
                     **kwargs,
                 )
                 base_logits = base_out.logits.detach()  # [B, T, V]
+
+        # -----------------------------
+        # 2) encoder 실행 + FiLM + Adapter
+        # -----------------------------
+        encoder = self._get_encoder()
+        enc_out = encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+
+        H_before = enc_out.last_hidden_state            # [B, Ls, d]
+        H_after  = self.film(H_before, prev_ct)         # FiLM
+        g = self.scalar_gate(prev_ct)
+        H_after  = H_before + g * (H_after - H_before)
+        H_after  = self.adapter(H_after)                # Adapter
+        delta_H  = H_after - H_before                   # residual (3-2용)
+
+        # -----------------------------
+        # 3) prefix hidden 생성 + encoder_hidden_states 확장
+        #    (self.prefix_proj, cfg.prefix_m이 이미 __init__에 정의되어 있다고 가정)
+        # -----------------------------
+
+        B, Ls, d_model = H_after.size()
+        m = self.cfg.prefix_m
+
+        # context 기반 prefix hidden 생성
+        prefix_hidden = self.prefix_proj(prev_ct).view(B, m, d_model)  # [B, m, d]
+        enc_hidden_with_prefix = torch.cat([prefix_hidden, H_after], dim=1)  # [B, m+Ls, d]
+
+        if attention_mask is not None:
+            prefix_mask = torch.ones(B, m, dtype=attention_mask.dtype, device=attention_mask.device)
+            enc_mask_with_prefix = torch.cat([prefix_mask, attention_mask], dim=1)  # [B, m+Ls]
+        else:
+            enc_mask_with_prefix = None
 
         # -----------------------------
         # 4) decoder 실행 (context-aware 경로)

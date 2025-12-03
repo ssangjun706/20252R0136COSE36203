@@ -13,12 +13,13 @@
 ```
 cose362/
 ├── data/
-│   └── aihub_news/       # AIHub News 데이터셋
-│   └── loaders.py        # 소스와 포맷이 호환되게 하는 데이터 전처리
-│   └── _xlsx.py          # xlsx 포맷 로드 도움 함수
+│   └── aihub_news/         # AIHub News 데이터셋
+│   └── wiki_augmented_v1/  # lemonmint-wiki 전처리 데이터셋
+│   └── loaders.py          # 데이터를 적절히 로드해주는 함수
+│   └── _xlsx.py            # xlsx 포맷을 위한 로더 도움 함수
 │
 ├── prototype/
-│   └── model.py          # 추후 src로 이동.
+│   └── model.py          # 추후 src로 이동. *
 │
 ├── src/
 │   ├── configs/  # 데이터셋 및 모델에 대한 configuration 정의
@@ -26,6 +27,7 @@ cose362/
 │   │   └── _config.py    # CFG Parent Class 정의
 │   │   └── aihub.py      # 개별 CFG Child Class 정의
 │   │   └── lemonmint.py  # 개별 CFG Child Class 정의
+│   │   └── wiki.py       # 개별 CFG Child Class 정의
 │   │
 │   └── baseline.py       # 모델 백본 빌더
 │   └── eval.py           # 모델 평가 엔트리 포인트 
