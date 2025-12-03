@@ -13,7 +13,7 @@ from math import ceil
 import torch, sacrebleu
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from ..data.loaders import load_eval_dataset
-from .configs import CONFIGS
+from .configs import CONFIGS # -> __init__.py: CONFIGS 딕셔너리
 from .utils import * # main을 제외하고 모두 utils로 보내서 정리함.
 try:
     from tqdm.auto import tqdm
@@ -25,7 +25,8 @@ def main():
     logger = setup_logger()
 
     # 데이터셋 선택 (aihub_en2ko / lemonmint_en2ko / wiki_en2ko...)
-    cfg = CONFIGS["wiki_en2ko"]  # 일단 하드코딩 해둠. 추후 필요시: argparse 등으로 개선
+    # 일단 하드코딩 해둠. 추후 필요시: argparse 등으로 개선
+    cfg = CONFIGS["wiki_en2ko"]  # 각 dataset.py의 CFG 객체
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
     # model_dir = os.path.join(cfg.OUTPUT_DIR, "final")
     # load_dir = model_dir if os.path.isdir(model_dir) else cfg.MODEL_NAME

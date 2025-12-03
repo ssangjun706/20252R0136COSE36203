@@ -13,8 +13,8 @@ from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
 from typing  import Dict
 from ._xlsx import build_hfds_from_xlsx
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-HF_LOCAL_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "hf_cache"))
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+# HF_LOCAL_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "hf"))
 
 
 # --------------------------------------------------------
@@ -22,7 +22,7 @@ HF_LOCAL_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "hf_cache"))
 # --------------------------------------------------------
 def _load_hf_dataset(cfg, logger=None):
     """
-    HF dataset을 /root/data/hf 에 캐시하고,
+    HF dataset을 /root/data/에 캐싱하고,
     테스트 split을 Dataset 형태로 반환.
 
     CFG 필수:
@@ -35,7 +35,7 @@ def _load_hf_dataset(cfg, logger=None):
     cfg_name = cfg.HF_DATASET_CONFIG or "default"
     split = cfg.HF_SPLIT
 
-    local_dir = os.path.join(HF_LOCAL_ROOT, name, cfg_name, split)
+    local_dir = os.path.join(THIS_DIR, name, cfg_name, split)
 
     # --- 1) load from local cache -------------------------
     if os.path.isdir(local_dir):
@@ -112,6 +112,7 @@ def _load_local_json(cfg):
         if not files:
             raise FileNotFoundError(f"No .json file found in {path}")
     
+    idx_list = []
     src_list = []
     tgt_list = []
 
@@ -121,10 +122,11 @@ def _load_local_json(cfg):
             raw = json.load(f)
 
         for item in raw:
+            idx_list.append(item[cfg.IDX_FIELD] if cfg.IDX_FIELD in item else len(idx_list))
             src_list.append(item[cfg.SRC_FIELD])
             tgt_list.append(item[cfg.TGT_FIELD])
 
-    return Dataset.from_dict({"src": src_list, "tgt": tgt_list})
+    return Dataset.from_dict({"idx": idx_list, "src": src_list, "tgt": tgt_list})
 
 
 # --------------------------------------------------------
@@ -143,6 +145,7 @@ def _load_local_jsonl(cfg):
         if not files:
             raise FileNotFoundError(f"No .jsonl file found in {path}")
 
+    idx_list = []
     src_list = []
     tgt_list = []
 
@@ -156,10 +159,11 @@ def _load_local_jsonl(cfg):
                 
                 obj = json.loads(line)  # 한 줄 = 하나의 JSON 객체
 
+                idx_list.append(obj[cfg.IDX_FIELD] if cfg.IDX_FIELD in obj else len(idx_list))
                 src_list.append(obj[cfg.SRC_FIELD])
                 tgt_list.append(obj[cfg.TGT_FIELD])
 
-    return Dataset.from_dict({"src": src_list, "tgt": tgt_list})
+    return Dataset.from_dict({"idx": idx_list, "src": src_list, "tgt": tgt_list})
 
 
 # --------------------------------------------------------
@@ -225,6 +229,9 @@ def load_eval_dataset(cfg, logger=None):
     Always returns datasets.Dataset
     with columns "src" and "tgt".
     """
+    if cfg.IDX_FIELD is None:
+        # raise Warning("CFG.IDX_FIELD가 존재하지 않습니다. 이거 없으면 시발 train하면 안됨.")
+        print("[WARNING] CFG.IDX_FIELD가 존재하지 않습니다. 이거 없으면 시발 train하면 안됨.")
 
     if cfg.SOURCE == "hf":
         return _load_hf_dataset(cfg, logger)

@@ -37,6 +37,7 @@ class CFG:
     # -------------------------
     # 3) 컬럼 정보
     # -------------------------
+    IDX_FIELD: Optional[str] = None  # 동일 맥락 문장 식별용
     SRC_FIELD: str = "src"
     TGT_FIELD: str = "tgt"
     SRC_LANG: Optional[str] = None

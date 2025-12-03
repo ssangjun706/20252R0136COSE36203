@@ -34,7 +34,8 @@ ENV/
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Data files (이거 건들지 마라 data 커밋되면 용량이 너무 크다.)
+# Data files (건들지 마라: 용량 이슈로 GitHub 업로드 에러난다)
+# 참고로 예외규칙 안될경우 git add -f data/로 강제 스테이징 후 커밋할것
 data/
 !data/*.py
 

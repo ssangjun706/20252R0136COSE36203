@@ -1,9 +1,14 @@
 # src/configs/wiki.py
+"""
+lemonmint_wiki 데이터를 문장 단위로 가공한 데이터 셋
+"""
 from ._config import CFG
 
 WIKI_EN2KO = CFG(
     SOURCE="local",
     FORMAT="jsonl",
+    
+    IDX_FIELD="idx",
     SRC_FIELD="english",
     TGT_FIELD="korean",
 
