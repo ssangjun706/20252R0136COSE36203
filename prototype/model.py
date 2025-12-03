@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any, Tuple, List
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from transformers.modeling_outputs import BaseModelOutput
 
 # ------------------------
 # 1) 기본 모듈
@@ -194,6 +195,55 @@ class ContextAwareMTWrapper(nn.Module):
         # 2) encoder_hidden_states에 prefix/context를 넣는 generate용 경로를 짜야 한다.
         return self.base.generate(*args, **kwargs)
     
+    def _contextualize_encoder(
+        self,
+        input_ids,
+        attention_mask,
+        prev_ct: Optional[torch.Tensor],
+        prev_input_ids,
+        prev_attention_mask,
+        return_hidden_states: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        if prev_ct is None:
+            if prev_input_ids is None or prev_attention_mask is None:
+                raise ValueError("Provide prev_ct or prev_input_ids + prev_attention_mask")
+            with torch.no_grad():
+                prev_ct = self.encode_prev_and_cache_ct(prev_input_ids, prev_attention_mask)
+
+        encoder = self._get_encoder()
+        enc_out = encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            return_dict=True,
+        )
+
+        H_before = enc_out.last_hidden_state            # [B, Ls, d]
+        H_after  = self.adapter(self.film(H_before, prev_ct))
+
+        B, Ls, d_model = H_after.size()
+        m = self.cfg.prefix_m
+
+        prefix_hidden = self.prefix_proj(prev_ct).view(B, m, d_model)
+        enc_hidden_with_prefix = torch.cat([prefix_hidden, H_after], dim=1)
+
+        if attention_mask is not None:
+            prefix_mask = torch.ones(B, m, dtype=attention_mask.dtype, device=attention_mask.device)
+            enc_mask_with_prefix = torch.cat([prefix_mask, attention_mask], dim=1)
+        else:
+            enc_mask_with_prefix = None
+
+        outputs = {
+            "prev_ct": prev_ct,
+            "encoder_hidden_states": enc_hidden_with_prefix,
+            "encoder_attention_mask": enc_mask_with_prefix,
+        }
+
+        if return_hidden_states:
+            outputs["H_before"] = H_before
+            outputs["H_after"] = H_after
+
+        return outputs
+
     # ------ forward ------
     def forward(
         self,
@@ -380,6 +430,43 @@ class ContextAwareMTWrapper(nn.Module):
             "kl_loss": kl_loss,
             "residual_loss": res_loss,
         }
+
+    @torch.no_grad()
+    def generate(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        prev_ct: Optional[torch.Tensor] = None,
+        prev_input_ids=None,
+        prev_attention_mask=None,
+        **gen_kwargs,
+    ):
+        if input_ids is None:
+            raise ValueError("input_ids is required for generation.")
+
+        ctx = self._contextualize_encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            prev_ct=prev_ct,
+            prev_input_ids=prev_input_ids,
+            prev_attention_mask=prev_attention_mask,
+            return_hidden_states=False,
+        )
+
+        encoder_outputs = BaseModelOutput(
+            last_hidden_state=ctx["encoder_hidden_states"]
+        )
+        encoder_attention_mask = ctx["encoder_attention_mask"]
+
+        gen_kwargs = dict(gen_kwargs)
+        gen_kwargs["encoder_outputs"] = encoder_outputs
+        if encoder_attention_mask is not None:
+            gen_kwargs["attention_mask"] = encoder_attention_mask
+
+        return self.base.generate(
+            input_ids=input_ids,
+            **gen_kwargs,
+        )
 
 
 # ------------------------
