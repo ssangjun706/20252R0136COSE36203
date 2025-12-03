@@ -145,7 +145,7 @@ def setup_logger():
     )
     return logging.getLogger(__name__)
 
-def inspect_dataset(ds, tokenizer, cfg, logger, sample_limit=50000):
+def inspect_dataset(ds, tokenizer, logger, sample_limit=50000):
     """
     데이터셋 분석(로그출력용):
       - 총 문장 수

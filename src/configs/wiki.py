@@ -12,6 +12,8 @@ WIKI_EN2KO = CFG(
     SRC_FIELD="english",
     TGT_FIELD="korean",
 
+    MAX_GROUPS=2000,
+
     RAW_DIR="cose362/data/wiki_augmented_v1",
     MODEL_NAME="facebook/nllb-200-distilled-600M",
 )

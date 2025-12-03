@@ -46,7 +46,7 @@ def main():
     # 3) 백본 모델 + 토크나이저
     tok, base_model = build_backbone(cfg)
 
-    # inspect_dataset
+    inspect_dataset(train_ds, tok, logger)
 
     # 4) context-aware 모델 래핑
     model = build_context_model(base_model, cfg)

@@ -44,7 +44,7 @@ class FiLM(nn.Module):
         beta  = gamma_beta[..., d:]     # [B, d]
         gamma = gamma.unsqueeze(1)      # [B, 1, d]
         beta  = beta.unsqueeze(1)       # [B, 1, d]
-        return gamma * h + beta
+        return h + gamma * h + beta
 
 
 class ContextProjector(nn.Module):
@@ -177,20 +177,24 @@ class ContextAwareMTWrapper(nn.Module):
         raise ValueError("Decoder not found")
 
     # ------ context 추출 ------
-
-    @torch.no_grad()
     def encode_prev_and_cache_ct(self, prev_input_ids, prev_attention_mask) -> torch.Tensor:
-        enc = self._get_encoder()(
-            input_ids=prev_input_ids,
-            attention_mask=prev_attention_mask,
-            return_dict=True,
-        )
-        H_prev = enc.last_hidden_state  # [B, L_prev, d]
+        with torch.no_grad():
+            enc = self._get_encoder()(
+                input_ids=prev_input_ids,
+                attention_mask=prev_attention_mask,
+                return_dict=True,
+            )
+            H_prev = enc.last_hidden_state  # [B, L_prev, d]
         ct = self.ctx_proj(H_prev)      # [B, r]
         return ct
 
+    # ------- generate -------
+    def generate(self, *args, **kwargs):
+        # 1) prev_ct 처리 전략을 어떻게 할지 설계해야 하고
+        # 2) encoder_hidden_states에 prefix/context를 넣는 generate용 경로를 짜야 한다.
+        return self.base.generate(*args, **kwargs)
+    
     # ------ forward ------
-
     def forward(
         self,
         input_ids,
@@ -208,10 +212,12 @@ class ContextAwareMTWrapper(nn.Module):
         """
 
         cfg = self.cfg
-        lambda_kl = getattr(cfg, "lambda_KL", 0.0)
-        lambda_res = getattr(cfg, "lambda_resid", 0.0)
-        kl_temp = getattr(cfg, "kl_temperature", 1.0)
-
+        # lambda_kl = getattr(cfg, "lambda_kl", 0.1)
+        # lambda_res = getattr(cfg, "lambda_resid", 0.01)
+        # kl_temp = getattr(cfg, "kl_temperature", 1.0)
+        lambda_kl = cfg.lambda_kl
+        lambda_res = cfg.lambda_resid
+        kl_temp = cfg.kl_temperature
 
         # case:
         #  - prev_ct 없는 경우 → prev_input_ids로 context 계산   # 학습 모드
@@ -219,8 +225,7 @@ class ContextAwareMTWrapper(nn.Module):
         if prev_ct is None:
             if prev_input_ids is None or prev_attention_mask is None:
                 raise ValueError("Provide prev_ct or prev_input_ids + prev_attention_mask")
-            with torch.no_grad():
-                prev_ct = self.encode_prev_and_cache_ct(prev_input_ids, prev_attention_mask)
+            prev_ct = self.encode_prev_and_cache_ct(prev_input_ids, prev_attention_mask)
 
         # -----------------------------
         # 1) (옵션) 베이스라인 모델의 출력도 계산 (KL용)
@@ -253,6 +258,8 @@ class ContextAwareMTWrapper(nn.Module):
 
         H_before = enc_out.last_hidden_state            # [B, Ls, d]
         H_after  = self.film(H_before, prev_ct)         # FiLM
+        g = self.scalar_gate(prev_ct)
+        H_after  = H_before + g * (H_after - H_before)
         H_after  = self.adapter(H_after)                # Adapter
         delta_H  = H_after - H_before                   # residual (3-2용)
 
