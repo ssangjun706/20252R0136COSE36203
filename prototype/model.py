@@ -177,6 +177,28 @@ class ContextAwareMTWrapper(nn.Module):
             return self.base.decoder
         raise ValueError("Decoder not found")
 
+    @staticmethod
+    def _shift_tokens_right(labels: torch.Tensor, pad_token_id: int, start_id: int) -> torch.Tensor:
+        """Replicate HF shift_tokens_right for cases where the base model does not expose the helper."""
+        shifted = labels.new_zeros(labels.shape)
+        shifted[:, 1:] = labels[:, :-1]
+        shifted[:, 0] = start_id
+        shifted.masked_fill_(shifted == -100, pad_token_id)
+        return shifted
+
+    # Seq2SeqTrainer/DataCollatorForSeq2Seq가 decoder_input_ids를 생성할 때 사용
+    def prepare_decoder_input_ids_from_labels(self, labels):
+        if hasattr(self.base, "prepare_decoder_input_ids_from_labels"):
+            return self.base.prepare_decoder_input_ids_from_labels(labels)
+
+        pad_id = getattr(self.base.config, "pad_token_id", 0) or 0
+        start_id = (
+            getattr(self.base.config, "decoder_start_token_id", None)
+            or getattr(self.base.config, "bos_token_id", None)
+            or pad_id
+        )
+        return self._shift_tokens_right(labels, pad_id, start_id)
+
     # ------ context 추출 ------
     def encode_prev_and_cache_ct(self, prev_input_ids, prev_attention_mask) -> torch.Tensor:
         with torch.no_grad():
@@ -263,11 +285,25 @@ class ContextAwareMTWrapper(nn.Module):
         # HF Trainer (>=4.46) 가 loss 스케일링용으로 넘겨주는 kwarg.
         # base 모델은 이 인자를 모른다 → 여기서 제거해서 아래로 넘기지 않는다.
         kwargs.pop("num_items_in_batch", None)
+
+        # decoder_inputs_embeds가 들어오면 무조건 제거한다.
+        # decoder_input_ids와 동시에 들어오면 HF 베이스 모델에서 ValueError를 발생시키므로
+        # 여기서 선제적으로 걸러낸다.
         kwargs.pop("decoder_inputs_embeds", None)
 
         lambda_kl = cfg.lambda_kl
         lambda_res = cfg.lambda_resid
         kl_temp = cfg.kl_temperature
+
+        # Trainer가 wrapper의 helper를 인식하지 못해 decoder_input_ids를 만들지 못하는 경우가 있다.
+        # labels가 있으면 base 모델의 util을 사용해 decoder_input_ids를 생성한다.
+        if decoder_input_ids is None and labels is not None:
+            decoder_input_ids = self.prepare_decoder_input_ids_from_labels(labels)
+
+        if decoder_attention_mask is None and decoder_input_ids is not None:
+            pad_id = getattr(self.base.config, "pad_token_id", 0)
+            decoder_attention_mask = decoder_input_ids.ne(pad_id).long()
+
 
         # case:
         #  - prev_ct 없는 경우 → prev_input_ids로 context 계산   # 학습 모드
@@ -287,6 +323,7 @@ class ContextAwareMTWrapper(nn.Module):
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     decoder_input_ids=decoder_input_ids,
+                    decoder_inputs_embeds=None,
                     decoder_attention_mask=decoder_attention_mask,
                     use_cache=False,
                     output_hidden_states=False,
@@ -313,23 +350,6 @@ class ContextAwareMTWrapper(nn.Module):
         H_before               = ctx["H_before"]
         H_after                = ctx["H_after"]
         delta_H  = H_after - H_before                   # residual (3-2용)
-
-        # -----------------------------
-        # 3) prefix hidden 생성 + encoder_hidden_states 확장
-        #    (self.prefix_proj, cfg.prefix_m이 이미 __init__에 정의되어 있다고 가정)
-        # -----------------------------
-        B, Ls, d_model = H_after.size()
-        m = self.cfg.prefix_m
-
-        # context 기반 prefix hidden 생성
-        prefix_hidden = self.prefix_proj(prev_ct).view(B, m, d_model)  # [B, m, d]
-        enc_hidden_with_prefix = torch.cat([prefix_hidden, H_after], dim=1)  # [B, m+Ls, d]
-
-        if attention_mask is not None:
-            prefix_mask = torch.ones(B, m, dtype=attention_mask.dtype, device=attention_mask.device)
-            enc_mask_with_prefix = torch.cat([prefix_mask, attention_mask], dim=1)  # [B, m+Ls]
-        else:
-            enc_mask_with_prefix = None
 
         # -----------------------------
         # 4) decoder 실행 (context-aware 경로)

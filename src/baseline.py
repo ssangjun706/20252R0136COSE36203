@@ -159,6 +159,15 @@ class ContextDataCollator:
             "prev_input_ids",
             "prev_attention_mask",
         }
+        # DataCollatorForSeq2Seq의 자동 decoder_input_ids 생성을 방지하기 위해
+        # decoder_inputs_embeds를 추가로 필터링
+        self._collator_keys_to_remove = {
+            "idx",
+            "sent_idx", 
+            "prev_input_ids",
+            "prev_attention_mask",
+            "decoder_inputs_embeds",  # 자동 생성되는 경우 제거
+        }
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
         prev_inputs: List[Optional[List[int]]] = []
@@ -180,10 +189,18 @@ class ContextDataCollator:
             prev_inputs.append(prev_ids)
             prev_masks.append(prev_mask)
 
+            # 메타데이터 제거
             filtered = {k: v for k, v in feat.items() if k not in self._meta_keys}
+            # decoder_inputs_embeds도 제거 (있을 경우)
+            filtered.pop("decoder_inputs_embeds", None)
             filtered_features.append(filtered)
 
+        # base collator에서 decoder_input_ids 자동 생성이 발생하면 제거
         batch = self.base_collator(filtered_features)
+        
+        # 혹시 base_collator에서 생성한 decoder_inputs_embeds 제거
+        batch.pop("decoder_inputs_embeds", None)
+        
         prev_batch = self._build_prev_batch(prev_inputs, prev_masks)
         batch.update(prev_batch)
         return batch
