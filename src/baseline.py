@@ -28,6 +28,8 @@ def build_backbone(cfg: CFG):
     # 언어 코드 지정 (NLLB/M2M 등)
     if hasattr(tok, "src_lang") and cfg.SRC_LANG:
         tok.src_lang = cfg.SRC_LANG
+    if hasattr(tok, "tgt_lang") and getattr(cfg, "TGT_LANG", None):
+        tok.tgt_lang = cfg.TGT_LANG
 
     model = AutoModelForSeq2SeqLM.from_pretrained(cfg.MODEL_NAME)
     return tok, model
@@ -49,21 +51,11 @@ def build_preprocess_fn(tok, cfg: CFG) -> Callable[[Dict[str, Any]], Dict[str, A
         )
 
         # 타깃 (decoder labels)
-        if hasattr(tok, "as_target_tokenizer"):
-            # 허깅페이스 최신 스타일 (NLLB 등)
-            with tok.as_target_tokenizer():
-                labels = tok(
-                    examples["tgt"],
-                    max_length=max_tgt,
-                    truncation=True,
-                )
-        else:
-            # 구형/기타 토크나이저 호환용
-            labels = tok(
-                text_target=examples["tgt"],
-                max_length=max_tgt,
-                truncation=True,
-            )
+        labels = tok(
+            text_target=examples["tgt"],
+            max_length=max_tgt,
+            truncation=True,
+        )
 
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs

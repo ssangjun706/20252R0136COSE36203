@@ -76,19 +76,30 @@ def main():
     # 6) TrainingArguments
     args = Seq2SeqTrainingArguments(
         output_dir=cfg.OUTPUT_DIR,
-        evaluation_strategy="steps",
+
+        # 평가 / 저장 / 로깅 전략
+        eval_strategy="steps",
         eval_steps=cfg.EVAL_STEPS,
+        save_strategy="steps",
         save_steps=cfg.SAVE_STEPS,
+        logging_strategy="steps",
         logging_steps=cfg.LOG_STEPS,
+
+        # 학습 하이퍼파라미터
         per_device_train_batch_size=cfg.TRAIN_BS,
         per_device_eval_batch_size=cfg.EVAL_BS,
         learning_rate=cfg.LR,
         weight_decay=cfg.WD,
         num_train_epochs=cfg.EPOCHS,
+
+        # seq2seq 관련
         predict_with_generate=True,
         generation_max_length=cfg.MAX_TGT,
+
+        # mixed precision
         fp16=getattr(cfg, "FP16", False),
         bf16=getattr(cfg, "BF16", False),
+
         report_to="none",
         seed=cfg.SEED,
     )

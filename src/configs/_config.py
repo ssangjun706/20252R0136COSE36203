@@ -56,21 +56,23 @@ class CFG:
     # -------------------------
     # 5) 학습/평가
     # -------------------------
+    MAX_GROUPS: Optional[int] = None
     OUTPUT_DIR: Optional[str] = None
     SEED: int = 1337
     SENTENCE_LEVEL: bool = True        # 샘플을 쪼갠 후, 문장 단위 번역 여부 (실제 측정 시 반드시 켜야함)
     EVAL_MAX_SAMPLES: Optional[int] = 2000  # 랜덤 샘플링 개수 (None이면 전체 사용)
 
-    # LR: float = 2e-5
-    # WD: float = 0.01
-    # EPOCHS: int = 2
-    # TRAIN_BS: int = 32
-    # EVAL_BS: int = 32
-    # FP16: bool = False
-    # BF16: bool = True
-    # LOG_STEPS: int = 200
-    # SAVE_STEPS: int = 2000
-    # EVAL_STEPS: int = 2000
+    # 학습 파라미터
+    LR: float = 2e-5
+    WD: float = 0.01
+    EPOCHS: int = 2
+    TRAIN_BS: int = 32
+    EVAL_BS: int = 32
+    FP16: bool = False
+    BF16: bool = True
+    LOG_STEPS: int = 200
+    SAVE_STEPS: int = 2000
+    EVAL_STEPS: int = 2000
 
     # -------------------------
     # 6) POST INIT

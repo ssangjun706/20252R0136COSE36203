@@ -111,9 +111,9 @@ class ContextConfig:
     sim_clip_min: float = 0.0
     sim_clip_max: float = 1.0
 
-    lambda_kl      = 0.1
-    lambda_resid   = 0.01
-    kl_temperature = 1.0
+    lambda_kl: float        = 0.0
+    lambda_resid: float     = 0.01
+    kl_temperature: float   = 1.0
     prefix_m       = 8
 
 def infer_dims_from_base(base) -> Tuple[int, int, int]:
@@ -189,11 +189,6 @@ class ContextAwareMTWrapper(nn.Module):
         ct = self.ctx_proj(H_prev)      # [B, r]
         return ct
 
-    # ------- generate -------
-    def generate(self, *args, **kwargs):
-        # 1) prev_ct 처리 전략을 어떻게 할지 설계해야 하고
-        # 2) encoder_hidden_states에 prefix/context를 넣는 generate용 경로를 짜야 한다.
-        return self.base.generate(*args, **kwargs)
     
     def _contextualize_encoder(
         self,
@@ -218,11 +213,13 @@ class ContextAwareMTWrapper(nn.Module):
         )
 
         H_before = enc_out.last_hidden_state            # [B, Ls, d]
-        H_after  = self.adapter(self.film(H_before, prev_ct))
+        H_film  = self.film(H_before, prev_ct)         # FiLM
+        g = self.scalar_gate(prev_ct)
+        H_after  = H_before + g * (H_film - H_before)
+        H_after  = self.adapter(H_after)                # Adapter
 
         B, Ls, d_model = H_after.size()
         m = self.cfg.prefix_m
-
         prefix_hidden = self.prefix_proj(prev_ct).view(B, m, d_model)
         enc_hidden_with_prefix = torch.cat([prefix_hidden, H_after], dim=1)
 
@@ -262,9 +259,12 @@ class ContextAwareMTWrapper(nn.Module):
         """
 
         cfg = self.cfg
-        # lambda_kl = getattr(cfg, "lambda_kl", 0.1)
-        # lambda_res = getattr(cfg, "lambda_resid", 0.01)
-        # kl_temp = getattr(cfg, "kl_temperature", 1.0)
+
+        # HF Trainer (>=4.46) 가 loss 스케일링용으로 넘겨주는 kwarg.
+        # base 모델은 이 인자를 모른다 → 여기서 제거해서 아래로 넘기지 않는다.
+        kwargs.pop("num_items_in_batch", None)
+        kwargs.pop("decoder_inputs_embeds", None)
+
         lambda_kl = cfg.lambda_kl
         lambda_res = cfg.lambda_resid
         kl_temp = cfg.kl_temperature
@@ -291,33 +291,33 @@ class ContextAwareMTWrapper(nn.Module):
                     use_cache=False,
                     output_hidden_states=False,
                     return_dict=True,
-                    **kwargs,
+                    # **kwargs,
                 )
                 base_logits = base_out.logits.detach()  # [B, T, V]
 
         # -----------------------------
         # 2) encoder 실행 + FiLM + Adapter
         # -----------------------------
-        encoder = self._get_encoder()
-        enc_out = encoder(
+        ctx = self._contextualize_encoder(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            output_hidden_states=True,
-            return_dict=True,
+            prev_ct=prev_ct,
+            prev_input_ids=prev_input_ids,
+            prev_attention_mask=prev_attention_mask,
+            return_hidden_states=True,
         )
 
-        H_before = enc_out.last_hidden_state            # [B, Ls, d]
-        H_after  = self.film(H_before, prev_ct)         # FiLM
-        g = self.scalar_gate(prev_ct)
-        H_after  = H_before + g * (H_after - H_before)
-        H_after  = self.adapter(H_after)                # Adapter
+        enc_hidden_with_prefix = ctx["encoder_hidden_states"]
+        enc_mask_with_prefix   = ctx["encoder_attention_mask"]
+        prev_ct                = ctx["prev_ct"]
+        H_before               = ctx["H_before"]
+        H_after                = ctx["H_after"]
         delta_H  = H_after - H_before                   # residual (3-2용)
 
         # -----------------------------
         # 3) prefix hidden 생성 + encoder_hidden_states 확장
         #    (self.prefix_proj, cfg.prefix_m이 이미 __init__에 정의되어 있다고 가정)
         # -----------------------------
-
         B, Ls, d_model = H_after.size()
         m = self.cfg.prefix_m
 
@@ -444,6 +444,8 @@ class ContextAwareMTWrapper(nn.Module):
         if input_ids is None:
             raise ValueError("input_ids is required for generation.")
 
+        gen_kwargs.pop("decoder_inputs_embeds", None)
+
         ctx = self._contextualize_encoder(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -472,7 +474,6 @@ class ContextAwareMTWrapper(nn.Module):
 # ------------------------
 # 3) 유틸: ContextCache
 # ------------------------
-
 class ContextCache:
     """직전 ct 캐시. 스트림 ID 별로 관리."""
     def __init__(self):
@@ -494,7 +495,6 @@ class ContextCache:
 # ------------------------
 # 4) 팩토리: cfg + base → context 모델
 # ------------------------
-
 def build_context_model(base_model: nn.Module, cfg) -> ContextAwareMTWrapper:
     """
     CFG 안에 컨텍스트 관련 하이퍼파라미터가 있다면 여기서 ContextConfig로 옮겨 담을 수 있음.
@@ -505,5 +505,8 @@ def build_context_model(base_model: nn.Module, cfg) -> ContextAwareMTWrapper:
         bottleneck=getattr(cfg, "CTX_BOTTLENECK", 96),
         prefix_m=getattr(cfg, "CTX_PREFIX_M", 8),
         topk_decoder_layers_for_prefix=getattr(cfg, "CTX_TOPK_DEC_LAYERS", 3),
+        lambda_kl=getattr(cfg, "CTX_LAMBDA_KL", 0.1),
+        lambda_resid=getattr(cfg, "CTX_LAMBDA_RESID", 0.01),
+        kl_temperature=getattr(cfg, "CTX_KL_T", 1.0),
     )
     return ContextAwareMTWrapper(base_model, ctx_cfg)
