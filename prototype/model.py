@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers.modeling_outputs import BaseModelOutput
+from transformers.modeling_utils import PreTrainedModel
 
 # ------------------------
 # 1) 기본 모듈
@@ -133,7 +134,8 @@ def infer_dims_from_base(base) -> Tuple[int, int, int]:
     d_k = d_v = d_model // n_heads
     return d_model, d_k, d_v
 
-class ContextAwareMTWrapper(nn.Module):
+class ContextAwareMTWrapper(PreTrainedModel):
+    _supports_sdpa = True  # HF가 SDPA 경로를 써도 된다고 알려주는 플래그
     """
     HuggingFace encoder-decoder 모델을 감싼 컨텍스트-어댑터 래퍼.
     - encoder: FiLM + Adapter
@@ -141,7 +143,8 @@ class ContextAwareMTWrapper(nn.Module):
               (정교한 K/V hook 버전은 추후 확장)
     """
     def __init__(self, base_model: nn.Module, cfg: ContextConfig):
-        super().__init__()
+        # PreTrainedModel takes care of save_pretrained/state_dict handling (incl. tied weights)
+        super().__init__(base_model.config)
         # ---- freeze ----
         self.base = base_model # 백본
         for p in self.base.parameters():
