@@ -18,7 +18,6 @@ from transformers.modeling_utils import PreTrainedModel
 # ------------------------
 # 1) 기본 모듈
 # ------------------------
-
 class Adapter(nn.Module):
     def __init__(self, d_model: int, bottleneck: int = 96):
         """Bottleneck Adapter: h -> h + h', / where h' = U @ f(D @ h)."""
@@ -100,7 +99,6 @@ class ScalarGate(nn.Module):
 # ------------------------
 # 2) context-aware 래퍼
 # ------------------------
-
 @dataclass
 class ContextConfig:
     r: int = 96                 # context bottleneck
@@ -165,7 +163,6 @@ class ContextAwareMTWrapper(PreTrainedModel):
         self.scalar_gate = ScalarGate(cfg.r)
 
     # ------ encoder/decoder helper ------
-
     def _get_encoder(self):
         if hasattr(self.base, "model") and hasattr(self.base.model, "encoder"):
             return self.base.model.encoder
