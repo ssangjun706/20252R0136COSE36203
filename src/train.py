@@ -18,6 +18,7 @@ from transformers import (
     Seq2SeqTrainer,
     set_seed,
 )
+from transformers.trainer_utils import get_last_checkpoint
 
 from .configs import CONFIGS
 from .configs._config import CFG
@@ -114,9 +115,17 @@ def main():
         tokenizer=tok,
     )
 
+
+        
     # 8) 학습
     logger.info("[TRAIN] 학습 시작")
-    trainer.train()
+    last_ckpt = get_last_checkpoint(cfg.OUTPUT_DIR)
+    if last_ckpt is not None:
+        logger.info(f"[TRAIN] 이전 체크포인트에서 재개: {last_ckpt}")
+        trainer.train(resume_from_checkpoint=last_ckpt)
+    else:
+        logger.info(f"[TRAIN] 새로 학습 시작")
+        trainer.train()
 
     # 9) 저장 (context 모델도 base와 동일하게 save_pretrained 사용 가능)
     final_dir = os.path.join(cfg.OUTPUT_DIR, "final")

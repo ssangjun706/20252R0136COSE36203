@@ -22,7 +22,7 @@ WIKI_EN2KO = CFG(
     # 학습 파라미터
     LR=5e-4,            # learning rate
     WD=0.01,            # weight decay
-    EPOCHS=3,           
+    EPOCHS=6,           
     TRAIN_BS=32,        # 한 step에 들어가는 샘플 수 (gpu 성능 따라 정할것.)
     EVAL_BS=32,         # 평가 시 사용하는 batch size
     LOG_STEPS=100,      # 몇 step 마다 loss/lr 등을 로그로 찍을지
