@@ -106,6 +106,39 @@ def maybe_subsample_dataset(ds, cfg, logger, max_samples=2000):
     return ds.select(indices)
 
 
+def maybe_subsample_by_idx(ds, cfg, logger):
+    """문맥 그룹(idx 단위)으로 서브샘플링. 평가 셋이 너무 크면 idx 그룹을 무작위로 골라 전체 문장을 유지한다."""
+    idx_field = getattr(cfg, "IDX_FIELD", None) or "idx"
+    max_groups = getattr(cfg, "EVAL_MAX_SAMPLES", 2000)
+    n = len(ds)
+    if idx_field not in ds.column_names:
+        return maybe_subsample_dataset(ds, cfg, logger, max_samples=max_groups)
+
+    idxs = ds[idx_field]
+    # idx가 정수/문자 혼합일 수 있으므로 리스트로 변환 후 고유값 추출 (등장순 유지)
+    seen = set()
+    uniq = []
+    for v in idxs:
+        if v not in seen:
+            seen.add(v)
+            uniq.append(v)
+
+    total_groups = len(uniq)
+    if max_groups is None or max_groups <= 0 or total_groups <= max_groups:
+        return ds
+
+    logger.info(f"[EVAL] 그룹 단위 샘플링: 총 {total_groups:,}개 중 {max_groups:,}개 그룹 선택")
+    rng = random.Random(getattr(cfg, "SEED", 1337))
+    rng.shuffle(uniq)
+    keep = set(uniq[:max_groups])
+
+    # 필터로 그룹 전체 유지
+    def _keep(example):
+        return example.get(idx_field) in keep
+
+    return ds.filter(_keep)
+
+
 # ---------------- 문장 단위 번역용 helper ----------------
 def translate_batch_texts(model, tok, dev, amp_ctx, gen_kwargs, texts, cfg):
     """

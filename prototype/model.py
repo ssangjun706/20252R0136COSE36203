@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers.modeling_outputs import BaseModelOutput
 from transformers.modeling_utils import PreTrainedModel
+from transformers import AutoModelForSeq2SeqLM, AutoConfig
 
 # ------------------------
 # 1) 기본 모듈
@@ -134,17 +135,33 @@ def infer_dims_from_base(base) -> Tuple[int, int, int]:
 
 class ContextAwareMTWrapper(PreTrainedModel):
     _supports_sdpa = True  # HF가 SDPA 경로를 써도 된다고 알려주는 플래그
+    config_class = AutoConfig
     """
     HuggingFace encoder-decoder 모델을 감싼 컨텍스트-어댑터 래퍼.
     - encoder: FiLM + Adapter
     - decoder: encoder_hidden_states 앞에 prefix_hidden 붙여서 "문맥 토큰" 제공
               (정교한 K/V hook 버전은 추후 확장)
     """
-    def __init__(self, base_model: nn.Module, cfg: ContextConfig):
-        # PreTrainedModel takes care of save_pretrained/state_dict handling (incl. tied weights)
-        super().__init__(base_model.config)
+    def __init__(self, config, base_model: Optional[nn.Module] = None, cfg: Optional[ContextConfig] = None):
+        # PreTrainedModel handles save_pretrained/state_dict (incl. tied weights)
+        super().__init__(config)
+
+        if base_model is None:
+            base_model = AutoModelForSeq2SeqLM.from_config(config)
+
+        # cfg를 config에서 복원 (없으면 기본값)
+        cfg = cfg or ContextConfig(
+            r=getattr(config, "CTX_R", 96),
+            bottleneck=getattr(config, "CTX_BOTTLENECK", 96),
+            prefix_m=getattr(config, "CTX_PREFIX_M", 8),
+            topk_decoder_layers_for_prefix=getattr(config, "CTX_TOPK_DEC_LAYERS", 3),
+            lambda_kl=getattr(config, "CTX_LAMBDA_KL", 0.0),
+            lambda_resid=getattr(config, "CTX_LAMBDA_RESID", 0.01),
+            kl_temperature=getattr(config, "CTX_KL_T", 1.0),
+        )
+
         # ---- freeze ----
-        self.base = base_model # 백본
+        self.base = base_model
         for p in self.base.parameters():
             p.requires_grad = False
 
@@ -466,6 +483,19 @@ class ContextAwareMTWrapper(PreTrainedModel):
 
         gen_kwargs.pop("decoder_inputs_embeds", None)
 
+        # 컨텍스트 정보가 없으면 0 벡터로 대체해 단일 문장 번역을 허용
+        if prev_ct is None and prev_input_ids is None:
+            # batch size 추론
+            B = input_ids.size(0)
+            device = input_ids.device
+            dtype = next(self.parameters()).dtype
+            prev_ct = torch.zeros(B, self.cfg.r, device=device, dtype=dtype)
+            prev_attention_mask = torch.ones(B, 1, device=device, dtype=attention_mask.dtype if attention_mask is not None else torch.long)
+
+        # prev_input_ids만 있는 경우에도 prev_attention_mask 기본값 보정
+        if prev_input_ids is not None and prev_attention_mask is None:
+            prev_attention_mask = torch.ones_like(prev_input_ids, dtype=torch.long)
+
         ctx = self._contextualize_encoder(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -529,4 +559,17 @@ def build_context_model(base_model: nn.Module, cfg) -> ContextAwareMTWrapper:
         lambda_resid=getattr(cfg, "CTX_LAMBDA_RESID", 0.01),
         kl_temperature=getattr(cfg, "CTX_KL_T", 1.0),
     )
-    return ContextAwareMTWrapper(base_model, ctx_cfg)
+    # config에 컨텍스트 하이퍼파라미터도 기록해 재로딩 시 복원 가능하게 한다.
+    cfg_fields = {
+        "CTX_R": ctx_cfg.r,
+        "CTX_BOTTLENECK": ctx_cfg.bottleneck,
+        "CTX_PREFIX_M": ctx_cfg.prefix_m,
+        "CTX_TOPK_DEC_LAYERS": ctx_cfg.topk_decoder_layers_for_prefix,
+        "CTX_LAMBDA_KL": ctx_cfg.lambda_kl,
+        "CTX_LAMBDA_RESID": ctx_cfg.lambda_resid,
+        "CTX_KL_T": ctx_cfg.kl_temperature,
+    }
+    for k, v in cfg_fields.items():
+        setattr(base_model.config, k, v)
+
+    return ContextAwareMTWrapper(base_model.config, base_model=base_model, cfg=ctx_cfg)
