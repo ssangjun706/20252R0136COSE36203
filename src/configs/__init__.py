@@ -10,9 +10,11 @@ CFG 객체 딕셔너리
 from .aihub import AIHUB_EN2KO
 from .lemonmint import LEMONMINT_EN2KO
 from .wiki import WIKI_EN2KO
+from .wiki2 import WIKI_EN2KO as WIKI_EN2KO2
 
 CONFIGS = {
     "aihub_en2ko": AIHUB_EN2KO,
     "lemonmint_en2ko": LEMONMINT_EN2KO,
     "wiki_en2ko": WIKI_EN2KO,
+    "wiki_en2ko_2": WIKI_EN2KO2,  # wiki2.py의 설정 사용
 }

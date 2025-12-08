@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import os
 from dataclasses import dataclass
 from typing import Optional, Literal
 
@@ -58,6 +59,8 @@ class CFG:
     # -------------------------
     MAX_GROUPS: Optional[int] = None
     OUTPUT_DIR: Optional[str] = None
+    OUTPUT_ROOT: str = "out"  # 결과 저장 루트 경로
+    RUN_NAME: Optional[str] = None  # 동일 데이터/방향 내에서 파라미터별로 폴더 분리
     SEED: int = 1337
     SENTENCE_LEVEL: bool = True        # 샘플을 쪼갠 후, 문장 단위 번역 여부 (실제 측정 시 반드시 켜야함)
     EVAL_MAX_SAMPLES: Optional[int] = 2000  # 랜덤 샘플링 개수 (None이면 전체 사용)
@@ -135,4 +138,5 @@ class CFG:
                     raise ValueError("RAW_DIR required for DATA_TYPE='xlsx' or 'jsonl'")
                 dataset = self.RAW_DIR.replace("/", "_").replace("\\", "_")
 
-            self.OUTPUT_DIR = f"out/{dataset}/{self.DIRECTION}"
+            base_dir = os.path.join(self.OUTPUT_ROOT, dataset, self.DIRECTION)
+            self.OUTPUT_DIR = os.path.join(base_dir, self.RUN_NAME) if self.RUN_NAME else base_dir
