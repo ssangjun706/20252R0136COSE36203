@@ -32,7 +32,7 @@ def main():
     logger = setup_logger()
 
     # 1) 데이터셋 선택 (aihub_en2ko / lemonmint_en2ko / wiki_en2ko ...)
-    cfg: CFG = CONFIGS["wiki_en2ko"] # 일단 하드코딩 해둠. 추후 필요시: argparse 등으로 개선
+    cfg: CFG = CONFIGS["wiki_en2ko_2"] # 일단 하드코딩 해둠. 추후 필요시: argparse 등으로 개선
     os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
 
     set_seed(cfg.SEED)
@@ -103,6 +103,9 @@ def main():
 
         report_to="none",
         seed=cfg.SEED,
+        dataloader_num_workers=4,      # CPU 코어 상황에 맞춰 4~8 정도 실험
+        dataloader_pin_memory=True,
+        dataloader_prefetch_factor=2,  # 필요시 조절
     )
 
     # 7) Trainer

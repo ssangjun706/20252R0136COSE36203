@@ -10,4 +10,5 @@ AIHUB_EN2KO = CFG(
 
     RAW_DIR="cose362/data/aihub_news",
     MODEL_NAME="facebook/nllb-200-distilled-600M",
+    RUN_NAME="default",
 )
